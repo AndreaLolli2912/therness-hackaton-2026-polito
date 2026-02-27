@@ -101,10 +101,11 @@ def run_training(
             print(f"\nEarly stopping at epoch {epoch + 1}")
             break
 
-    print(f"\nTraining complete. Best epoch: {best_epoch} (val_loss={best_val_loss:.4f})")
+    print(f"\nTraining complete. Best epoch: {best_epoch} (val_f1={best_val_f1:.4f})")
 
     return {
         "train_losses": train_losses,
         "val_losses": val_losses,
         "best_epoch": best_epoch,
+        "best_val_f1": best_val_f1
     }

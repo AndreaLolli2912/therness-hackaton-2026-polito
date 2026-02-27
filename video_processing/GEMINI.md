@@ -1,24 +1,24 @@
-# Supervised Multimodal Welding Defect Detection
+# Supervised Welding Defect Detection
 
-This project implements a supervised, multimodal architecture for welding defect detection using Video and Audio (FLAC) data, optimized for high-accuracy classification and edge/ARM deployment.
+This project implements supervised models for welding defect detection using Video and Audio data, optimized for high-accuracy classification and edge/ARM deployment.
 
-The video model is located in the `video_processing` directory.
+## Architecture
 
-## Architecture: Multimodal Fusion Classifier
+We currently train independent models for different modalities to maintain modularity and robustness.
 
-Instead of independent anomaly scores, we use a unified **Late Fusion** architecture to classify defect types directly.
-
-### 1. Video Branch (Spatial Features)
-- **Backbone:** MobileNetV3-Small (Pretrained on ImageNet).
-- **Role:** Extracts high-level spatial features from 224x224 welding frames.
-- **Output:** 576-dimensional feature vector per frame.
+### 1. Video Branch (Spatial-Temporal Features)
+- **Backbone:** MobileNetV3-Small + GRU.
+- **Role:** Extracts spatial features from frames and aggregates them temporally to detect defect patterns.
+- **Input:** 224x224 welding frames (sequences).
+- **Output:** 7-class probability distribution.
 
 ### 2. Audio Branch (Spectral Features)
 - **Backbone:** 2D CNN (ResNet-style).
 - **Input:** Log-Mel Spectrograms generated from FLAC audio.
-- **Output:** 128-dimensional spectral feature vector.
+- **Output:** 7-class probability distribution.
 
-### 3. Fusion (TODO)
+### 3. Sensor Data
+- **Status:** Sensor data (CSV) is utilized for dashboard visualization and real-time monitoring but is not currently used for training the primary defect detection models.
 
 ## Setup
 
@@ -27,7 +27,7 @@ Instead of independent anomaly scores, we use a unified **Late Fusion** architec
    cd video_processing
    ```
 
-2. Install dependencies (added torchaudio for the audio branch):
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
@@ -39,24 +39,24 @@ Instead of independent anomaly scores, we use a unified **Late Fusion** architec
 
 ## Workflow
 
-### 1. Data Preparation
-The dataset is split by **Run ID** to prevent temporal leakage. Labels are extracted from folder names in `good_weld` and `defect_data_weld`.
-
-### 2. Training
-Train the unified multimodal classifier:
+### 1. Video Training
+Train the video classifier:
 ```bash
-python3 train_multimodal.py
+python3 train.py --config ../configs/master_config.json
 ```
-*Note: Supports training on Video-only, Sensor-only, or Full Fusion by toggling flags in the script.*
 
-### 3. Inference & Submission
-Run the inference script to generate the `submission.csv` for the hackathon:
+### 2. Audio Training
+Train the audio classifier (from the project root):
 ```bash
-python3 generate_submission.py --data_path ../test_data
+python run_audio.py --config configs/master_config.json
+```
+
+### 3. Inference
+Run the video inference script:
+```bash
+python3 inference.py --video_model checkpoints/video_classifier.pth
 ```
 
 ## Edge Deployment Considerations
-- **Efficiency:** MobileNetV3 and small LSTMs are used to maintain low latency on ARM/Jetson devices.
-- **Modularity:** The architecture allows "Graceful Degradation"—if a sensor or camera fails, the model can still provide a prediction based on the remaining modalities.
+- **Efficiency:** MobileNetV3 and small LSTMs/GRUs are used to maintain low latency on ARM/Jetson devices.
 - **Quantization:** Compatible with INT8 quantization for deployment on constrained hardware.
-
