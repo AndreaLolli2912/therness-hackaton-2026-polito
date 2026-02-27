@@ -5,6 +5,8 @@ eval "$(conda shell.bash hook)"
 conda create -n therness_env python=3.11 -y
 conda activate therness_env
 conda install -c conda-forge ffmpeg -y
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 pip install --upgrade pip
 pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision torchaudio
 pip install torchcodec
