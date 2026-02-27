@@ -6,7 +6,7 @@ import random
 import numpy as np
 import torch
 
-from train import train_epoch, validate_epoch
+from audio.train import train_epoch, validate_epoch
 
 
 def set_seed(seed):
