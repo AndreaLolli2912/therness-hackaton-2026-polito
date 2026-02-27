@@ -5,31 +5,29 @@ from tqdm import tqdm
 from sklearn.metrics import f1_score
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None, collect_preds=True):
-    """Run one training epoch.
-
-    Args:
-        model: nn.Module to train.
-        dataloader: yields (inputs, targets) tuples. inputs can be a Tensor
-            or a dict (unpacked as **kwargs to the model).
-        criterion: loss function.
-        optimizer: optimizer.
-        device: torch device.
-        scheduler: optional LR scheduler (stepped per batch).
-        collect_preds: if True, return predictions and targets.
-
-    Returns:
-        dict with "loss" (float) and optionally "predictions" / "targets" (Tensors).
-    """
+def train_epoch(
+    model,
+    dataloader,
+    criterion,
+    optimizer,
+    device,
+    scheduler=None,
+    collect_preds=False,
+):
     model.train()
+
     running_loss = 0.0
     n_samples = 0
+
     all_preds = []
     all_targets = []
 
     pbar = tqdm(dataloader, desc="Training", leave=False)
+
     for inputs, targets in pbar:
+
         targets = targets.to(device)
+
         if isinstance(inputs, dict):
             inputs = {k: v.to(device) for k, v in inputs.items()}
             outputs = model(**inputs)
@@ -39,7 +37,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None,
 
         loss = criterion(outputs, targets)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)  # slightly faster
         loss.backward()
         optimizer.step()
 
@@ -51,17 +49,19 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None,
         n_samples += batch_size
 
         if collect_preds:
-            _, predicted = outputs.max(1)
-            all_preds.append(predicted.detach().cpu())
+            all_preds.append(outputs.detach().cpu())
             all_targets.append(targets.detach().cpu())
 
         pbar.set_postfix(loss=running_loss / n_samples)
 
-    result = {"loss": running_loss / n_samples}
+    epoch_loss = running_loss / n_samples
+
+    result = {"loss": epoch_loss}
+
     if collect_preds:
-        preds = torch.cat(all_preds).numpy()
-        targets = torch.cat(all_targets).numpy()
-        result["macro_f1"] = f1_score(targets, preds, average='macro', zero_division=0)
+        result["predictions"] = torch.cat(all_preds, dim=0)
+        result["targets"] = torch.cat(all_targets, dim=0)
+
     return result
 
 

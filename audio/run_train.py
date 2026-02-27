@@ -59,6 +59,7 @@ def run_training(
     epochs_without_improvement = 0
     train_losses = []
     val_losses = []
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
     for epoch in range(num_epochs):
         print(f"\nEpoch {epoch + 1}/{num_epochs}")
