@@ -1,5 +1,5 @@
 conda create -n therness_env python=3.11 -y
-conda activate torch311
+conda activate therness_env
 pip install --upgrade pip
 pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
 python - <<'PY'
