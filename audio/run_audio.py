@@ -20,9 +20,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
 from audio_model import AudioCNN
-from audio_processing import AudioDataset
-from run_train import run_training
-from test import run_test, generate_submission
+from audio.audio_processing import AudioDataset
+from audio.run_train import run_training
+from audio.test import run_test, generate_submission
 
 
 def load_config(config_path: str) -> dict:
