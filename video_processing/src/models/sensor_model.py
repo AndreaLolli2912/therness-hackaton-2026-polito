@@ -37,3 +37,23 @@ class SensorAutoencoder(nn.Module):
         reconstructed = self.forward(x)
         score = torch.mean((x - reconstructed) ** 2, dim=(1, 2))
         return score
+
+class SensorClassifier(nn.Module):
+    def __init__(self, input_size=6, hidden_size=64, num_classes=7, num_layers=2):
+        super(SensorClassifier, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers=num_layers, batch_first=True, dropout=0.2)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size, 32),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(32, num_classes)
+        )
+
+    def forward(self, x):
+        # x: [batch, seq_len, input_size]
+        # We only care about the last hidden state for classification
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        # h_n shape: [num_layers, batch, hidden_size]
+        last_hidden = h_n[-1] 
+        logits = self.classifier(last_hidden)
+        return logits
