@@ -2,9 +2,10 @@
 
 import torch
 from tqdm import tqdm
+from sklearn.metrics import f1_score
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None, collect_preds=False):
+def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None, collect_preds=True):
     """Run one training epoch.
 
     Args:
@@ -50,15 +51,17 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None,
         n_samples += batch_size
 
         if collect_preds:
-            all_preds.append(outputs.detach().cpu())
+            _, predicted = outputs.max(1)
+            all_preds.append(predicted.detach().cpu())
             all_targets.append(targets.detach().cpu())
 
         pbar.set_postfix(loss=running_loss / n_samples)
 
     result = {"loss": running_loss / n_samples}
     if collect_preds:
-        result["predictions"] = torch.cat(all_preds)
-        result["targets"] = torch.cat(all_targets)
+        preds = torch.cat(all_preds).numpy()
+        targets = torch.cat(all_targets).numpy()
+        result["macro_f1"] = f1_score(targets, preds, average='macro', zero_division=0)
     return result
 
 
@@ -97,13 +100,16 @@ def validate_epoch(model, dataloader, criterion, device):
             running_loss += loss.item() * batch_size
             n_samples += batch_size
 
-            all_preds.append(outputs.cpu())
+            _, predicted = outputs.max(1)
+            all_preds.append(predicted.cpu())
             all_targets.append(targets.cpu())
 
             pbar.set_postfix(loss=running_loss / n_samples)
 
+    preds = torch.cat(all_preds).numpy()
+    targets = torch.cat(all_targets).numpy()
+    
     return {
         "loss": running_loss / n_samples,
-        "predictions": torch.cat(all_preds),
-        "targets": torch.cat(all_targets),
+        "macro_f1": f1_score(targets, preds, average='macro', zero_division=0)
     }

@@ -1,0 +1,58 @@
+{
+  "project_name": "therness-welding-hackathon",
+  "data_root": "/data1/malto/therness/data/Hackathon",
+  "num_classes": 7,
+  "device": "auto",
+
+  "video": {
+    "model": {
+      "hidden_size": 128,
+      "pretrained": true
+    },
+    "training": {
+      "epochs": 20,
+      "batch_size": 8,
+      "lr": 1e-4,
+      "seq_len": 15,
+      "frame_skip": 5,
+      "metric": "macro_f1",
+      "checkpoint_path": "checkpoints/video_classifier.pth"
+    }
+  },
+
+  "sensor": {
+    "model": {
+      "input_size": 6,
+      "hidden_size": 64
+    },
+    "training": {
+      "epochs": 30,
+      "batch_size": 32,
+      "lr": 1e-3,
+      "window_size": 100,
+      "metric": "macro_f1",
+      "checkpoint_path": "checkpoints/sensor_classifier.pth",
+      "scaler_path": "checkpoints/sensor_scaler.pkl"
+    }
+  },
+
+  "audio": {
+    "feature_params": {
+      "sampling_rate": 16000,
+      "n_fft": 1024,
+      "n_mels": 40,
+      "max_length_in_s": 38.0
+    },
+    "model": {
+      "dropout": 0.3
+    },
+    "training": {
+      "num_epochs": 30,
+      "batch_size": 16,
+      "lr": 1e-3,
+      "patience": 7,
+      "metric": "macro_f1",
+      "checkpoint_dir": "checkpoints/audio"
+    }
+  }
+}

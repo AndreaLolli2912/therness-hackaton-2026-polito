@@ -59,7 +59,7 @@ def submission_collate_fn(batch):
 
 def main():
     parser = argparse.ArgumentParser(description="Audio welding defect classification")
-    parser.add_argument("--config", type=str, default="configs/audio_config.json",
+    parser.add_argument("--config", type=str, default="configs/master_config.json",
                         help="Path to JSON config file")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to checkpoint for --test_only or --submission")
@@ -71,11 +71,25 @@ def main():
 
     # ── Load config ───────────────────────────────────────────────
     cfg = load_config(args.config)
-    audio_cfg = cfg["audio"]
-    model_cfg = cfg["model"]
-    optim_cfg = cfg["optimizer"]
-    train_cfg = cfg["training"]
-    data_cfg = cfg["data"]
+    
+    # Handle both old audio-only and new master config
+    if "audio" in cfg and "feature_params" in cfg["audio"]:
+        # New Master Config format
+        audio_cfg = cfg["audio"]["feature_params"]
+        model_cfg = cfg["audio"]["model"]
+        train_cfg = cfg["audio"]["training"]
+        # Add missing fields from master root if needed
+        audio_cfg["num_classes"] = cfg["num_classes"]
+        data_cfg = {"data_root": cfg["data_root"], "test_root": cfg.get("test_root", "")}
+        # Mock optimizer cfg for new master config
+        optim_cfg = {"lr": train_cfg["lr"], "weight_decay": 1e-4}
+    else:
+        # Fallback to old Audio Config format
+        audio_cfg = cfg["audio"]
+        model_cfg = cfg.get("model", {"dropout": 0.3})
+        optim_cfg = cfg.get("optimizer", {"lr": 1e-3, "weight_decay": 1e-4})
+        train_cfg = cfg["training"]
+        data_cfg = cfg["data"]
 
     print("=" * 50)
     print("Configuration:")

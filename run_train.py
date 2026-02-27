@@ -54,7 +54,7 @@ def run_training(
 
     model.to(device)
 
-    best_val_loss = float("inf")
+    best_val_f1 = -1.0
     best_epoch = -1
     epochs_without_improvement = 0
     train_losses = []
@@ -69,10 +69,11 @@ def run_training(
 
         train_loss = train_result["loss"]
         val_loss = val_result["loss"]
+        val_f1 = val_result["macro_f1"]
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        print(f"Train loss: {train_loss:.4f} | Val loss: {val_loss:.4f}")
+        print(f"Train loss: {train_loss:.4f} | Val loss: {val_loss:.4f} | Val Macro F1: {val_f1:.4f}")
 
         # Save last checkpoint
         checkpoint = {
@@ -80,16 +81,17 @@ def run_training(
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "val_loss": val_loss,
+            "val_f1": val_f1,
         }
         torch.save(checkpoint, os.path.join(checkpoint_dir, "last_model.pt"))
 
-        # Save best checkpoint
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Save best checkpoint based on Macro F1
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
             best_epoch = epoch + 1
             epochs_without_improvement = 0
             torch.save(checkpoint, os.path.join(checkpoint_dir, "best_model.pt"))
-            print(f"New best model saved (val_loss={val_loss:.4f})")
+            print(f"New best model saved (val_f1={val_f1:.4f})")
         else:
             epochs_without_improvement += 1
             print(f"No improvement for {epochs_without_improvement} epoch(s)")

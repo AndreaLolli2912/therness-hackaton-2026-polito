@@ -5,12 +5,21 @@ from torch.utils.data import DataLoader
 from src.models.sensor_model import SensorClassifier
 from src.data.sensor_dataset import WeldingSensorDataset, get_sensor_files_and_labels
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import f1_score
 import joblib
 import os
 import numpy as np
 import pandas as pd
+import json
 
-def train_sensor(data_root, epochs=30, batch_size=32, lr=1e-3, device='cpu'):
+def train_sensor(config):
+    s_conf = config['sensor']['training']
+    m_conf = config['sensor']['model']
+    data_root = config['data_root']
+    device = config['device']
+    if device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # 1. Discover data and labels
     sensor_data = get_sensor_files_and_labels(data_root)
     if not sensor_data:
@@ -36,32 +45,39 @@ def train_sensor(data_root, epochs=30, batch_size=32, lr=1e-3, device='cpu'):
         scaler.partial_fit(df[numerical_cols].values)
     
     # Save the scaler
-    os.makedirs('checkpoints', exist_ok=True)
-    joblib.dump(scaler, 'checkpoints/sensor_scaler.pkl')
+    os.makedirs(os.path.dirname(s_conf['scaler_path']), exist_ok=True)
+    joblib.dump(scaler, s_conf['scaler_path'])
 
     # 3. Create Datasets with the fitted scaler
     train_paths, train_labels = zip(*train_data)
     val_paths, val_labels = zip(*val_data)
     
-    train_dataset = WeldingSensorDataset(train_paths, labels=train_labels, scaler=scaler, window_size=100)
-    val_dataset = WeldingSensorDataset(val_paths, labels=val_labels, scaler=scaler, window_size=100)
+    train_dataset = WeldingSensorDataset(train_paths, labels=train_labels, scaler=scaler, window_size=s_conf['window_size'])
+    val_dataset = WeldingSensorDataset(val_paths, labels=val_labels, scaler=scaler, window_size=s_conf['window_size'])
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=s_conf['batch_size'], shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=s_conf['batch_size'], shuffle=False)
 
     # 4. Initialize supervised classifier
-    model = SensorClassifier(input_size=6, hidden_size=64, num_classes=7).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    model = SensorClassifier(
+        input_size=m_conf['input_size'], 
+        hidden_size=m_conf['hidden_size'], 
+        num_classes=config['num_classes']
+    ).to(device)
     
-    best_val_acc = 0.0
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=s_conf['lr'])
+    
+    best_metric = 0.0
+    epochs = s_conf['epochs']
 
-    print(f"Starting sensor classifier training on {device}...")
+    print(f"Starting sensor classifier training on {device}. Metric: {s_conf['metric']}")
     for epoch in range(epochs):
         model.train()
         train_loss = 0
-        correct = 0
-        total = 0
+        all_preds = []
+        all_labels = []
+
         for windows, labels in train_loader:
             windows, labels = windows.to(device), labels.to(device)
             
@@ -74,14 +90,14 @@ def train_sensor(data_root, epochs=30, batch_size=32, lr=1e-3, device='cpu'):
             
             train_loss += loss.item()
             _, predicted = logits.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
         
         # Validation
         model.eval()
         val_loss = 0
-        val_correct = 0
-        val_total = 0
+        val_preds = []
+        val_labels_list = []
         with torch.no_grad():
             for windows, labels in val_loader:
                 windows, labels = windows.to(device), labels.to(device)
@@ -90,20 +106,32 @@ def train_sensor(data_root, epochs=30, batch_size=32, lr=1e-3, device='cpu'):
                 val_loss += loss.item()
                 
                 _, predicted = logits.max(1)
-                val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
+                val_preds.extend(predicted.cpu().numpy())
+                val_labels_list.extend(labels.cpu().numpy())
         
         avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0
-        val_acc = 100. * val_correct / val_total if val_total > 0 else 0
+        val_f1 = f1_score(val_labels_list, val_preds, average='macro', zero_division=0)
         
-        print(f"Epoch [{epoch+1}/{epochs}] Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+        print(f"Epoch [{epoch+1}/{epochs}] Val Loss: {avg_val_loss:.4f} | Val Macro F1: {val_f1:.4f}")
         
         # Save best model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save(model.state_dict(), 'checkpoints/sensor_classifier.pth')
+        if val_f1 > best_metric:
+            best_metric = val_f1
+            torch.save(model.state_dict(), s_conf['checkpoint_path'])
+            print(f"Saved new best model with F1: {best_metric:.4f}")
 
-    print(f"Training complete. Best Val Acc: {best_val_acc:.2f}%")
+    print(f"Training complete. Best Val Macro F1: {best_metric:.4f}")
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Train supervised sensor classifier with JSON config")
+    parser.add_argument("--config", type=str, default="../configs/master_config.json", help="Path to master config")
+    args = parser.parse_args()
+
+    with open(args.config, 'r') as f:
+        config = json.load(f)
+    
+    train_sensor(config)
 
 if __name__ == "__main__":
     import argparse
