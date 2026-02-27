@@ -2,49 +2,80 @@ import torch
 import torch.nn as nn
 from torchvision import models
 
-class VideoAutoencoder(nn.Module):
-    def __init__(self, latent_dim=128):
-        super(VideoAutoencoder, self).__init__()
+class StreamingVideoClassifier(nn.Module):
+    def __init__(self, num_classes=7, hidden_size=128, pretrained=True):
+        """
+        Hybrid CNN-RNN architecture for real-time welding defect detection.
+        Balances MobileNetV3 efficiency with GRU temporal awareness.
+        """
+        super(StreamingVideoClassifier, self).__init__()
         
-        # Encoder: Using MobileNetV3 Small as a backbone
-        mobilenet = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
-        self.encoder_features = mobilenet.features
+        # 1. Spatial Feature Extractor (MobileNetV3 Small)
+        backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None)
+        self.feature_extractor = backbone.features
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
         
-        # MobileNetV3 Small features output 576 channels for 7x7 if input is 224x224
-        self.flatten = nn.Flatten()
-        self.fc_encode = nn.Linear(576 * 7 * 7, latent_dim)
+        # MobileNetV3 Small feature dimension is 576
+        self.feature_dim = 576
         
-        # Decoder
-        self.fc_decode = nn.Linear(latent_dim, 576 * 7 * 7)
-        self.decoder = nn.Sequential(
-            nn.Unflatten(1, (576, 7, 7)),
-            nn.ConvTranspose2d(576, 256, kernel_size=3, stride=2, padding=1, output_padding=1), # 14x14
-            nn.BatchNorm2d(256),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1), # 28x28
-            nn.BatchNorm2d(128),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1), # 56x56
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1), # 112x112
-            nn.BatchNorm2d(32),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(32, 3, kernel_size=3, stride=2, padding=1, output_padding=1),  # 224x224
-            nn.Sigmoid() # Normalize output to [0, 1]
+        # 2. Temporal Aggregator (GRU)
+        # batch_first=True expects [batch, seq_len, features]
+        self.gru = nn.GRU(
+            input_size=self.feature_dim, 
+            hidden_size=hidden_size, 
+            num_layers=1, 
+            batch_first=True
+        )
+        
+        # 3. Classification Head
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, num_classes)
         )
 
-    def forward(self, x):
-        # x: [batch, 3, 224, 224]
-        features = self.encoder_features(x)
-        latent = self.fc_encode(self.flatten(features))
+    def forward(self, x, h=None):
+        """
+        Args:
+            x: [batch, seq_len, 3, 224, 224] - A sequence of frames.
+            h: [1, batch, hidden_size] - Optional hidden state for streaming.
+        Returns:
+            logits: [batch, num_classes] - Prediction based on the last frame's context.
+            h: [1, batch, hidden_size] - Updated hidden state.
+        """
+        if x.dim() == 4: # Handle single frame input [batch, 3, 224, 224]
+            x = x.unsqueeze(1)
+            
+        batch_size, seq_len, c, h_img, w_img = x.size()
         
-        reconstructed = self.fc_decode(latent)
-        reconstructed = self.decoder(reconstructed)
-        return reconstructed
+        # Flatten batch and seq_len for backbone processing
+        x = x.view(batch_size * seq_len, c, h_img, w_img)
+        
+        # Extract spatial features
+        features = self.feature_extractor(x)
+        features = self.avgpool(features)
+        features = torch.flatten(features, 1)
+        
+        # Reshape back to sequence format [batch, seq_len, feature_dim]
+        features = features.view(batch_size, seq_len, -1)
+        
+        # Temporal pass
+        # output: [batch, seq_len, hidden_size]
+        output, h = self.gru(features, h)
+        
+        # We classify based on the "state" at the final frame of the sequence
+        last_step_features = output[:, -1, :]
+        logits = self.classifier(last_step_features)
+        
+        return logits, h
 
-    def get_anomaly_score(self, x):
-        reconstructed = self.forward(x)
-        # Using MSE as the anomaly score
-        score = torch.mean((x - reconstructed) ** 2, dim=(1, 2, 3))
-        return score
+    @torch.no_grad()
+    def predict_stream(self, frame, hidden_state=None):
+        """
+        Inference helper for real-time streaming (1 frame at a time).
+        """
+        self.eval()
+        logits, next_h = self.forward(frame.unsqueeze(1), hidden_state)
+        probs = torch.softmax(logits, dim=1)
+        return probs, next_h

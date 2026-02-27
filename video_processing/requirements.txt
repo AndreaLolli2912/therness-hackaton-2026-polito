@@ -7,3 +7,7 @@ matplotlib
 scikit-learn
 joblib
 tqdm
+streamlit
+librosa
+plotly
+altair
