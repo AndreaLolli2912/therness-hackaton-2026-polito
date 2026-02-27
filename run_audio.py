@@ -115,12 +115,15 @@ def main():
 
     # ── Load labeled dataset ──────────────────────────────────────
     full_dataset = AudioDataset(data_cfg["data_root"], cfg=audio_cfg, labeled=True)
-    num_classes = len(full_dataset.label_to_idx)
+    
+    # Use fixed 7-class mapping for welding defects
+    label_map = {0: "00", 1: "01", 2: "02", 3: "06", 4: "07", 5: "08", 6: "11"}
+    num_classes = len(label_map)
     print(f"\nLoaded {len(full_dataset)} samples, {num_classes} classes")
-    print(f"Label mapping: {full_dataset.label_to_idx}")
+    print(f"Label mapping: {label_map}")
 
     # Store label_map in config so it gets saved with checkpoints
-    cfg["label_map"] = full_dataset.idx_to_label
+    cfg["label_map"] = label_map
 
     # ── Train/val split ───────────────────────────────────────────
     val_size = int(len(full_dataset) * train_cfg["val_split"])

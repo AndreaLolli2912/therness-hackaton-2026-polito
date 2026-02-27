@@ -106,6 +106,16 @@ def train_sensor(data_root, epochs=30, batch_size=32, lr=1e-3, device='cpu'):
     print(f"Training complete. Best Val Acc: {best_val_acc:.2f}%")
 
 if __name__ == "__main__":
-    data_path = os.path.expanduser("~/Desktop/Hackathon")
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-    train_sensor(data_root=data_path, device=device)
+    import argparse
+    parser = argparse.ArgumentParser(description="Train supervised sensor classifier")
+    parser.add_argument("--data_root", type=str, default=os.getenv("DATA_ROOT", "/data1/malto/therness/data/Hackathon"),
+                        help="Path to the root data directory")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    train_sensor(data_root=args.data_root, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, device=device)

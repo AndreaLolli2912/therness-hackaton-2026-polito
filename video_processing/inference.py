@@ -4,8 +4,8 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-from src.models.video_model import VideoAutoencoder
-from src.models.sensor_model import SensorAutoencoder
+from src.models.video_model import StreamingVideoClassifier
+from src.models.sensor_model import SensorClassifier
 from src.data.dataset import get_video_transforms
 
 class WeldingInference:
@@ -13,12 +13,12 @@ class WeldingInference:
         self.device = device
         
         # 1. Load Video Model
-        self.video_model = VideoAutoencoder(latent_dim=256).to(device)
+        self.video_model = StreamingVideoClassifier(num_classes=7).to(device)
         self.video_model.load_state_dict(torch.load(video_model_path, map_location=device))
         self.video_model.eval()
         
         # 2. Load Sensor Model
-        self.sensor_model = SensorAutoencoder(input_size=6, hidden_size=64, latent_dim=16).to(device)
+        self.sensor_model = SensorClassifier(input_size=6, hidden_size=64, num_classes=7).to(device)
         self.sensor_model.load_state_dict(torch.load(sensor_model_path, map_location=device))
         self.sensor_model.eval()
         
@@ -34,20 +34,20 @@ class WeldingInference:
 
     def predict_video_frame(self, frame):
         """
-        Predict anomaly score for a single BGR frame.
+        Predict defect probabilities for a single BGR frame.
         """
         # frame: BGR from OpenCV
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         input_tensor = self.video_transform(frame_rgb).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
-            score = self.video_model.get_anomaly_score(input_tensor)
-        return score.item()
+            logits, _ = self.video_model(input_tensor)
+            probs = torch.softmax(logits, dim=1)
+        return probs.squeeze().cpu().numpy()
 
     def predict_sensor_window(self, window_data):
         """
-        Predict anomaly score for a window of sensor data.
-        window_data: [window_size, 6] (raw sensor values)
+        Predict defect probabilities for a window of sensor data.
         """
         if self.scaler is not None:
             window_data = self.scaler.transform(window_data)
@@ -55,8 +55,9 @@ class WeldingInference:
         input_tensor = torch.tensor(window_data, dtype=torch.float32).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
-            score = self.sensor_model.get_anomaly_score(input_tensor)
-        return score.item()
+            logits = self.sensor_model(input_tensor)
+            probs = torch.softmax(logits, dim=1)
+        return probs.squeeze().cpu().numpy()
 
 def run_inference_sample(sample_dir, video_model_pth, sensor_model_pth, scaler_pth):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -97,7 +98,13 @@ def run_inference_sample(sample_dir, video_model_pth, sensor_model_pth, scaler_p
             print(f"First Sensor Window Anomaly Score: {score:.6f}")
 
 if __name__ == "__main__":
-    run_inference_sample('../sampleData/08-17-22-0011-00', 
-                         'checkpoints/video_autoencoder.pth', 
-                         'checkpoints/sensor_autoencoder.pth',
-                         'checkpoints/sensor_scaler.pkl')
+    import argparse
+    parser = argparse.ArgumentParser(description="Run inference on a welding sample")
+    parser.add_argument("--sample_dir", type=str, default=os.path.expanduser("~/Desktop/Hackathon/good_weld/config_1/run_1"),
+                        help="Path to the sample directory to analyze")
+    parser.add_argument("--video_model", type=str, default="checkpoints/video_classifier.pth")
+    parser.add_argument("--sensor_model", type=str, default="checkpoints/sensor_classifier.pth")
+    parser.add_argument("--scaler", type=str, default="checkpoints/sensor_scaler.pkl")
+    args = parser.parse_args()
+
+    run_inference_sample(args.sample_dir, args.video_model, args.sensor_model, args.scaler)

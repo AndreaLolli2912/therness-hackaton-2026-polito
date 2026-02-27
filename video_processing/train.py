@@ -95,8 +95,16 @@ def train_video(data_root, epochs=20, batch_size=8, lr=1e-4, device='cpu'):
     print(f"Video training complete. Best Val Acc: {best_val_acc:.2f}%")
 
 if __name__ == "__main__":
-    # Point to the user's actual data location
-    data_path = os.path.expanduser("~/Desktop/Hackathon")
+    import argparse
+    parser = argparse.ArgumentParser(description="Train supervised video classifier")
+    parser.add_argument("--data_root", type=str, default=os.getenv("DATA_ROOT", "/data1/malto/therness/data/Hackathon"), 
+                        help="Path to the root data directory")
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    args = parser.parse_args()
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-    train_video(data_root=data_path, device=device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    train_video(data_root=args.data_root, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, device=device)

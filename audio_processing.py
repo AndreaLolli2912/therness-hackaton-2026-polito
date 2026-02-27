@@ -128,17 +128,10 @@ class AudioTransform(nn.Module):
 class AudioDataset(torch.utils.data.Dataset):
     """Dataset that loads .flac files and returns log-mel spectrograms.
 
-    Args:
-        data_root: path to the data directory
-        cfg:       audio config dict (defaults to DEFAULT_AUDIO_CFG)
-        labeled:   if True, expects  data_root/{label}/sample_id/file.flac
-                   if False, expects data_root/sample_id/file.flac (no labels)
-
     Each item is a dict with:
         'audio':     (1, n_mels, T) log-mel spectrogram tensor
         'sample_id': str identifier (e.g. "08-17-22-0011-00")
-        'label':     int class index (only when labeled=True, else -1)
-        'label_name': str folder name (only when labeled=True, else "unlabeled")
+        'label':     int class index
     """
 
     def __init__(self, data_root: str, cfg: dict | None = None, labeled: bool = True):
@@ -146,21 +139,11 @@ class AudioDataset(torch.utils.data.Dataset):
         self.labeled = labeled
         self.transform = AudioTransform(cfg)
         self.files = sorted(glob.glob(os.path.join(data_root, "**", "*.flac"), recursive=True))
-
-        if self.labeled:
-            # Build label map from folder structure: data_root/{label}/sample_id/file.flac
-            label_names = sorted({self._get_label_name(f) for f in self.files})
-            self.label_to_idx = {name: i for i, name in enumerate(label_names)}
-            self.idx_to_label = {i: name for name, i in self.label_to_idx.items()}
-        else:
-            self.label_to_idx = {}
-            self.idx_to_label = {}
-
-    def _get_label_name(self, path: str) -> str:
-        """Extract label from path: data_root/{label}/sample_id/file.flac"""
-        rel = os.path.relpath(path, self.data_root)
-        # rel = "good/08-17-22-0011-00/08-17-22-0011-00.flac" → parts[0] = "good"
-        return rel.split(os.sep)[0]
+        
+        # Map label codes to 0-6 indices
+        self.label_map = {
+            "00": 0, "01": 1, "02": 2, "06": 3, "07": 4, "08": 5, "11": 6
+        }
 
     def __len__(self) -> int:
         return len(self.files)
@@ -170,19 +153,15 @@ class AudioDataset(torch.utils.data.Dataset):
         waveform, sr = torchaudio.load(path)
         mel = self.transform(waveform, sr)
 
-        # Extract sample ID from parent directory name
-        sample_id = os.path.basename(os.path.dirname(path))
-
-        if self.labeled:
-            label_name = self._get_label_name(path)
-            label = self.label_to_idx[label_name]
-        else:
-            label_name = "unlabeled"
-            label = -1
+        # Extract sample ID and label code from filename
+        filename = os.path.basename(path)
+        sample_id = os.path.splitext(filename)[0]
+        
+        label_code = sample_id.split('-')[-1] if '-' in sample_id else "00"
+        label = self.label_map.get(label_code, 0)
 
         return {
             'audio': mel,
             'sample_id': sample_id,
             'label': label,
-            'label_name': label_name,
         }
