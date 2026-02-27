@@ -53,10 +53,11 @@ class WeldingSequenceDataset(Dataset):
         sample = self.samples[idx]
         cap = cv2.VideoCapture(sample["video_path"])
         
+        # Seek once to the starting frame
+        cap.set(cv2.CAP_PROP_POS_FRAMES, sample["start_frame"])
+        
         frames = []
         for i in range(self.seq_len):
-            frame_idx = sample["start_frame"] + (i * self.frame_skip)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             
             if not ret:
@@ -71,6 +72,11 @@ class WeldingSequenceDataset(Dataset):
                 frame = torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
             
             frames.append(frame)
+
+            # Skip frames efficiently using grab() instead of set()
+            if i < self.seq_len - 1:
+                for _ in range(self.frame_skip - 1):
+                    cap.grab()
         
         cap.release()
         

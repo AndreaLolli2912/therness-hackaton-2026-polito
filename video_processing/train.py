@@ -9,6 +9,10 @@ import numpy as np
 import json
 from sklearn.metrics import f1_score, classification_report
 
+from sklearn.model_selection import train_test_split
+from torch.cuda.amp import GradScaler
+from torch.amp import autocast
+
 def train_video(config):
     # Extract configs
     v_conf = config['video']['training']
@@ -16,7 +20,7 @@ def train_video(config):
     data_root = config['data_root']
     device = config['device']
     if device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     
     # 1. Discover files and labels
     video_data = get_video_files_and_labels(data_root)
@@ -24,19 +28,15 @@ def train_video(config):
         print(f"No video data found in {data_root}")
         return
 
-    # Split by video file to prevent temporal leakage
-    np.random.seed(42)
-    np.random.shuffle(video_data)
-    split_idx = int(len(video_data) * 0.8)
-    train_data = video_data[:split_idx]
-    val_data = video_data[split_idx:]
-
-    print(f"Using {len(train_data)} videos for training and {len(val_data)} for validation.")
+    # Split by video file with stratification to prevent temporal leakage and maintain class balance
+    paths, labels = zip(*video_data)
+    train_paths, val_paths, train_labels, val_labels = train_test_split(
+        paths, labels, test_size=0.2, random_state=42, stratify=labels
+    )
+    
+    print(f"Using {len(train_paths)} videos for training and {len(val_paths)} for validation.")
 
     # 2. Prepare datasets
-    train_paths, train_labels = zip(*train_data)
-    val_paths, val_labels = zip(*val_data)
-
     train_dataset = WeldingSequenceDataset(
         train_paths, train_labels, 
         transform=get_video_transforms(), 
@@ -50,8 +50,9 @@ def train_video(config):
         frame_skip=v_conf['frame_skip']
     )
     
-    train_loader = DataLoader(train_dataset, batch_size=v_conf['batch_size'], shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_dataset, batch_size=v_conf['batch_size'], shuffle=False, num_workers=2)
+    # Increased num_workers for faster data loading
+    train_loader = DataLoader(train_dataset, batch_size=v_conf['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=v_conf['batch_size'], shuffle=False, num_workers=4, pin_memory=True)
     
     # 3. Initialize model
     model = StreamingVideoClassifier(
@@ -62,6 +63,9 @@ def train_video(config):
     
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=v_conf['lr'])
+    
+    # Mixed precision scaler
+    scaler = GradScaler(enabled=(device.type == 'cuda'))
     
     best_metric = 0.0
     epochs = v_conf['epochs']
@@ -76,12 +80,15 @@ def train_video(config):
         for i, (sequences, labels) in enumerate(train_loader):
             sequences, labels = sequences.to(device), labels.to(device)
             
-            logits, _ = model(sequences)
-            loss = criterion(logits, labels)
+            # Forward pass with mixed precision
+            with autocast('cuda'):
+                logits, _ = model(sequences)
+                loss = criterion(logits, labels)
             
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             train_loss += loss.item()
             _, predicted = logits.max(1)
