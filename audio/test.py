@@ -5,7 +5,7 @@ import csv
 import torch
 from tqdm import tqdm
 
-from train import validate_epoch
+from audio.train import validate_epoch
 
 
 def run_test(model, dataloader, criterion, device, checkpoint_path):
