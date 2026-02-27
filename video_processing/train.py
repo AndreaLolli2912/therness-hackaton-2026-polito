@@ -81,7 +81,7 @@ def train_video(config):
             sequences, labels = sequences.to(device), labels.to(device)
             
             # Forward pass with mixed precision
-            with autocast(enabled=(device.type == 'cuda')):
+            with autocast('cuda'):
                 logits, _ = model(sequences)
                 loss = criterion(logits, labels)
             
