@@ -47,5 +47,9 @@ def train(data_root, epochs=10, batch_size=8, lr=1e-4, device='cpu'):
     print("Training complete. Model saved to checkpoints/video_autoencoder.pth")
 
 if __name__ == "__main__":
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
     train(data_root='../sampleData', device=device)
