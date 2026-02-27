@@ -1,7 +1,11 @@
+#!/bin/bash
+set -e
+
+eval "$(conda shell.bash hook)"
 conda create -n therness_env python=3.11 -y
 conda activate therness_env
 pip install --upgrade pip
-pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
+pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision torchaudio
 python - <<'PY'
 import torch
 print("torch:", torch.__version__, "cuda:", torch.version.cuda, "gpu:", torch.cuda.is_available())
