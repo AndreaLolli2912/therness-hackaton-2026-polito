@@ -10,7 +10,8 @@ import json
 from sklearn.metrics import f1_score, classification_report
 
 from sklearn.model_selection import train_test_split
-from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import GradScaler
+from torch.amp import autocast
 
 def train_video(config):
     # Extract configs
