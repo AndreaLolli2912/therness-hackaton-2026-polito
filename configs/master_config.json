@@ -20,22 +20,6 @@
     }
   },
 
-  "sensor": {
-    "model": {
-      "input_size": 6,
-      "hidden_size": 64
-    },
-    "training": {
-      "epochs": 30,
-      "batch_size": 32,
-      "lr": 1e-3,
-      "window_size": 100,
-      "metric": "macro_f1",
-      "checkpoint_path": "checkpoints/sensor_classifier.pth",
-      "scaler_path": "checkpoints/sensor_scaler.pkl"
-    }
-  },
-
   "audio": {
     "feature_params": {
       "sampling_rate": 16000,

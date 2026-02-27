@@ -1,8 +1,8 @@
 # Supervised Multimodal Welding Defect Detection
 
-This project implements a supervised, multimodal architecture for welding defect detection using Video, Sensor (CSV), and Audio (FLAC) data, optimized for high-accuracy classification and edge/ARM deployment.
+This project implements a supervised, multimodal architecture for welding defect detection using Video and Audio (FLAC) data, optimized for high-accuracy classification and edge/ARM deployment.
 
-All code and models are located in the `video_processing` directory.
+The video model is located in the `video_processing` directory.
 
 ## Architecture: Multimodal Fusion Classifier
 
@@ -13,22 +13,12 @@ Instead of independent anomaly scores, we use a unified **Late Fusion** architec
 - **Role:** Extracts high-level spatial features from 224x224 welding frames.
 - **Output:** 576-dimensional feature vector per frame.
 
-### 2. Sensor Branch (Temporal Features)
-- **Backbone:** LSTM (Long Short-Term Memory).
-- **Input:** 6-dimensional time-series data (Pressure, Flow, Feed, Current, Wire, Voltage).
-- **Output:** 64-dimensional temporal context vector.
-
-### 3. Audio Branch (Spectral Features)
+### 2. Audio Branch (Spectral Features)
 - **Backbone:** 2D CNN (ResNet-style).
 - **Input:** Log-Mel Spectrograms generated from FLAC audio.
 - **Output:** 128-dimensional spectral feature vector.
 
-### 4. Fusion & Classification Head
-- **Mechanism:** Concatenates features from all three branches.
-- **Head:** Multi-layer Perceptron (MLP) with Dropout.
-- **Outputs:**
-  - **Primary:** Softmax probabilities for all 7 classes (00, 01, 02, 06, 07, 08, 11).
-  - **Secondary:** Binary `p_defect` (derived from the sum of non-00 probabilities).
+### 3. Fusion (TODO)
 
 ## Setup
 
