@@ -184,13 +184,13 @@ def train_video(config, full_train=False, checkpoint=None):
     t_dataset = time.time()
     train_dataset = WeldingSequenceDataset(
         train_paths, train_labels,
-        transform=get_video_transforms(),
+        transform=get_video_transforms(is_training=True),
         seq_len=v_conf['seq_len'],
         frame_skip=v_conf['frame_skip']
     )
     val_dataset = WeldingSequenceDataset(
         val_paths, val_labels,
-        transform=get_video_transforms(),
+        transform=get_video_transforms(is_training=False),
         seq_len=v_conf['seq_len'],
         frame_skip=v_conf['frame_skip']
     )
@@ -242,17 +242,18 @@ def train_video(config, full_train=False, checkpoint=None):
                 raise
 
 
-    # Inverse-frequency class weights
+    # Inverse-frequency class weights + Label Smoothing
     use_weights = v_conf.get('class_weights', 'inverse_frequency')
     if use_weights == 'inverse_frequency':
         weights = compute_class_weights(train_label_indices, num_classes).to(device)
         print(f"       Class weights (inverse-freq): {[f'{w:.3f}' for w in weights.tolist()]}")
-        criterion = nn.CrossEntropyLoss(weight=weights)
+        criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
     else:
         print(f"       Class weights: none (uniform)")
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     optimizer = optim.Adam(model.parameters(), lr=v_conf['lr'])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=v_conf['epochs'])
 
     # Mixed precision scaler
     use_amp = device.type == 'cuda'
@@ -394,6 +395,9 @@ def train_video(config, full_train=False, checkpoint=None):
             epoch_total = time.time() - epoch_start
             print(f"\n  Epoch {epoch+1} total time: {epoch_total:.1f}s")
             print(f"{'─'*65}\n")
+        
+        # Step the scheduler
+        scheduler.step()
 
     total_time = time.time() - _t0
     print(f"{'='*65}")
