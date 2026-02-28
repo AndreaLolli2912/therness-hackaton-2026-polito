@@ -247,10 +247,10 @@ def train_video(config, full_train=False, checkpoint=None):
     if use_weights == 'inverse_frequency':
         weights = compute_class_weights(train_label_indices, num_classes).to(device)
         print(f"       Class weights (inverse-freq): {[f'{w:.3f}' for w in weights.tolist()]}")
-        criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
+        criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.05)
     else:
         print(f"       Class weights: none (uniform)")
-        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
 
     optimizer = optim.Adam(model.parameters(), lr=v_conf['lr'])
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=v_conf['epochs'])

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Paths
-MODEL_PATH="/Users/timon/Desktop/Hackathon/gru_classifier_4_epochs.pth"
+MODEL_PATH="/Users/timon/Desktop/Hackathon/gru_classifier_2_epochs.pth"
 OUTPUT_CSV="predictions_video_gru.csv"
 
 # CHECK THIS: Set the path to the test_data folder (sample_XXXX subfolders inside)
