@@ -1,7 +1,6 @@
 {
   "project_name": "therness-welding-hackathon",
   "train_data_root": "/data1/malto/therness/data/Hackathon",
-  "data_root": "/data1/malto/therness/data/Hackathon",
   "test_data_root": "/root/data/test_data",
   "num_classes": 7,
   "device": "auto",
@@ -11,9 +10,9 @@
       "pretrained": true
     },
     "training": {
-      "epochs": 15,
+      "epochs": 20,
       "batch_size": 32,
-      "lr": 0.0003,
+      "lr": 0.001,
       "seq_len": 25,
       "frame_skip": 3,
       "metric": "hackathon_combined",
@@ -53,7 +52,8 @@
       "checkpoint_dir": "checkpoints/video_best_100",
       "checkpoint_path": "checkpoints/video_best_100/window_classifier.pth",
       "use_balanced_sampler": true,
-      "balanced_sampler_power": 0.3
+      "balanced_sampler_power": 0.3,
+      "target_metric_threshold": 0.95
     }
   },
   "fusion": {
@@ -75,7 +75,8 @@
       "seed": 42,
       "patience": 30,
       "good_weld_idx": 0,
-      "checkpoint_dir": "checkpoints/fusion_best_100"
+      "checkpoint_dir": "checkpoints/fusion_best_100",
+      "target_metric_threshold": 0.95
     }
   },
   "audio": {
@@ -126,7 +127,9 @@
         "balanced_sampler_power": 0.35
       },
       "metric": "macro_f1",
-      "checkpoint_dir": "checkpoints/audio_best_100"
+      "checkpoint_dir": "checkpoints/audio_best_100",
+      "target_metric_threshold": 0.95
     }
-  }
+  },
+  "data_root": "/data1/malto/therness/data/Hackathon"
 }
