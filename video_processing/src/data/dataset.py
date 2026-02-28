@@ -90,9 +90,28 @@ def get_video_transforms():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
+def get_group_from_path(video_path: str) -> str:
+    """
+    Extract the configuration folder name as a group key for GroupShuffleSplit.
+    
+    Directory structure: .../good_weld/<config_folder>/<run_id>/<run_id>.avi
+                     or: .../defect_data_weld/<config_folder>/<run_id>/<run_id>.avi
+    
+    The config folder (e.g., 'butt_Fe410_04-03-23') groups runs from the same
+    welding setup. Splitting on this prevents data leakage.
+    """
+    # video_path → run_id folder → config_folder
+    run_dir = os.path.dirname(video_path)
+    config_dir = os.path.dirname(run_dir)
+    return os.path.basename(config_dir)
+
+
 def get_video_files_and_labels(data_root):
     """
-    Scans directory and returns pairs of (video_path, label_code).
+    Scans directory and returns triples of (video_path, label_code, group).
+    
+    group is the configuration folder name, used for leakage-free splits
+    via GroupShuffleSplit.
     """
     video_data = []
     # This logic matches the DatasetExplorer structure
@@ -105,5 +124,6 @@ def get_video_files_and_labels(data_root):
                 run_id = os.path.splitext(file)[0]
                 parts = run_id.split('-')
                 label = parts[-1] if len(parts) > 1 else "00"
-                video_data.append((path, label))
+                group = get_group_from_path(path)
+                video_data.append((path, label, group))
     return video_data

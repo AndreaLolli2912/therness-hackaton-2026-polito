@@ -1,5 +1,5 @@
 """
-Video classifier training with hackathon-optimized scoring.
+Video classifier training with hackathon-optimized scoring (Multiclass).
 
 Key improvements over baseline:
   - Inverse-frequency class weights for imbalanced defect types

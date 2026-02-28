@@ -106,14 +106,17 @@ def run(cfg: InferenceConfig):
             num_classes=cfg.num_classes,
             dropout=cfg.audio_dropout,
         )
-        audio_transform = AudioTransform(
-            sample_rate=cfg.audio_sample_rate,
-            chunk_length_s=cfg.audio_chunk_length_s,
-            n_fft=cfg.audio_n_fft,
-            n_mels=cfg.audio_n_mels,
-            f_min=cfg.audio_f_min,
-            f_max=cfg.audio_f_max,
-        )
+        # Only create AudioTransform for raw AudioCNN models.
+        # TorchScript models include preprocessing internally.
+        if not isinstance(audio_model, torch.jit.ScriptModule):
+            audio_transform = AudioTransform(
+                sample_rate=cfg.audio_sample_rate,
+                chunk_length_s=cfg.audio_chunk_length_s,
+                n_fft=cfg.audio_n_fft,
+                n_mels=cfg.audio_n_mels,
+                f_min=cfg.audio_f_min,
+                f_max=cfg.audio_f_max,
+            )
 
     if video_model is None and audio_model is None:
         print("[main] ERROR: No models loaded. Provide at least one "
@@ -128,7 +131,7 @@ def run(cfg: InferenceConfig):
     if video_model and cfg.video_input:
         video_stream = VideoStreamProcessor(video_model, cfg.video_input, device)
 
-    if audio_model and audio_transform and cfg.audio_input:
+    if audio_model and cfg.audio_input:
         audio_stream = AudioStreamProcessor(
             audio_model, audio_transform, cfg.audio_input, device, cfg
         )

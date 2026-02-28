@@ -9,6 +9,7 @@ opencv-python>=4.8
 
 # Audio (file I/O already via torchaudio)
 sounddevice>=0.4     # optional: live microphone capture
+soundfile>=0.12      # FLAC/WAV loading (avoids torchaudio backend issues)
 
 # Sensor
 pandas>=2.0
