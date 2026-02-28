@@ -17,7 +17,23 @@
       "metric": "hackathon_combined",
       "class_weights": "inverse_frequency",
       "split_strategy": "group_shuffle",
-      "checkpoint_path": "checkpoints/video_classifier.pth"
+      "checkpoint_path": "checkpoints/video/gru_classifier.pth"
+    }
+  },
+  "video_window": {
+    "model": {
+      "pretrained": true
+    },
+    "training": {
+      "epochs": 3,
+      "batch_size": 32,
+      "lr": 1e-4,
+      "window_size": 8,
+      "window_stride": 4,
+      "metric": "hackathon_combined",
+      "class_weights": "inverse_frequency",
+      "split_strategy": "group_shuffle",
+      "checkpoint_path": "checkpoints/video/window_classifier.pth"
     }
   },
   "audio": {
