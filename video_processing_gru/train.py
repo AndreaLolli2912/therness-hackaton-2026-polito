@@ -224,15 +224,22 @@ def train_video(config, full_train=False, checkpoint=None):
     print(f"       Parameters: {n_params:,}")
     print(f"       Pretrained backbone: {m_conf['pretrained']}")
 
-    if "resume_from" in config.get('video', {}).get('training', {}):
-        checkpoint_path_to_load = config['video']['training']['resume_from']
-    else:
-        checkpoint_path_to_load = args.checkpoint if 'args' in locals() and hasattr(args, 'checkpoint') and args.checkpoint else None
+    checkpoint_path_to_load = config.get('video', {}).get('training', {}).get('resume_from') or checkpoint
 
-    if checkpoint_path_to_load and os.path.exists(checkpoint_path_to_load):
-        print(f"       Loading checkpoint from {checkpoint_path_to_load}...")
-        model.load_state_dict(torch.load(checkpoint_path_to_load, map_location=device))
-        print(f"       Checkpoint loaded successfully.")
+    if checkpoint_path_to_load:
+        abs_ckpt = os.path.abspath(checkpoint_path_to_load)
+        if not os.path.exists(checkpoint_path_to_load):
+            print(f"  ⚠ WARNING: Checkpoint file NOT FOUND: {abs_ckpt}")
+            print(f"       Training will start from scratch (pretrained backbone only).")
+        else:
+            print(f"       Loading checkpoint from {abs_ckpt}...")
+            try:
+                state_dict = torch.load(checkpoint_path_to_load, map_location=device)
+                model.load_state_dict(state_dict)
+                print(f"       ✓ Checkpoint loaded successfully.")
+            except Exception as e:
+                print(f"  ✗ ERROR loading checkpoint: {e}")
+                raise
 
 
     # Inverse-frequency class weights
