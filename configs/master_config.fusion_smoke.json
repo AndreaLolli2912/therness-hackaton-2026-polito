@@ -1,7 +1,6 @@
 {
   "project_name": "therness-welding-hackathon",
-  "train_data_root": "/root/data/train_data",
-  "test_data_root": "/root/data/test_data",
+  "data_root": "/data1/malto/therness/data/Hackathon",
   "num_classes": 7,
   "device": "auto",
   "video": {
@@ -10,15 +9,15 @@
       "pretrained": true
     },
     "training": {
-      "epochs": 20,
-      "batch_size": 32,
-      "lr": 0.001,
-      "seq_len": 25,
-      "frame_skip": 3,
+      "epochs": 3,
+      "batch_size": 16,
+      "lr": 0.0001,
+      "seq_len": 15,
+      "frame_skip": 5,
       "metric": "hackathon_combined",
       "class_weights": "inverse_frequency",
       "split_strategy": "group_shuffle",
-      "checkpoint_path": "checkpoints/video/gru_classifier_sprint.pth"
+      "checkpoint_path": "checkpoints/video/gru_classifier.pth"
     }
   },
   "video_window": {
@@ -60,18 +59,20 @@
       "audio_dim": 128,
       "video_dim": 128,
       "hidden_dim": 192,
-      "dropout": 0.2
+      "dropout": 0.2,
+      "arch": "temporal"
     },
     "training": {
-      "num_epochs": 90,
+      "num_epochs": 2,
       "lr": 0.0001,
       "weight_decay": 0.0001,
       "batch_size": 64,
       "val_split": 0.2,
       "seed": 42,
-      "patience": 22,
+      "patience": 2,
       "good_weld_idx": 0,
-      "checkpoint_dir": "checkpoints/fusion"
+      "checkpoint_dir": "checkpoints/fusion_smoke_temporal",
+      "sequence_len": 12
     }
   },
   "audio": {

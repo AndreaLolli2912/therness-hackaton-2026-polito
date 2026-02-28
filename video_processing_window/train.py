@@ -23,7 +23,7 @@ print("[2/8] Importing PyTorch...")
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.cuda.amp import GradScaler
 from torch.amp import autocast
 print(f"       PyTorch {torch.__version__} loaded.")
@@ -46,15 +46,45 @@ LABEL_CODE_MAP = {0: "00", 1: "01", 2: "02", 3: "06", 4: "07", 5: "08", 6: "11"}
 CODE_TO_IDX = {v: k for k, v in LABEL_CODE_MAP.items()}
 
 
-def compute_class_weights(labels, num_classes=7):
-    """Inverse-frequency weights: w_c = N / (num_classes * count_c)."""
+def compute_class_weights(labels, num_classes=7, power=1.0):
+    """Inverse-frequency weights with optional power scaling."""
     counts = Counter(labels)
     total = len(labels)
     weights = torch.zeros(num_classes, dtype=torch.float32)
     for cls_idx in range(num_classes):
         count = counts.get(cls_idx, 1)
         weights[cls_idx] = total / (num_classes * count)
+    if power != 1.0:
+        weights = torch.pow(weights, power)
+    mean_w = float(weights.mean()) if len(weights) > 0 else 1.0
+    if mean_w > 0:
+        weights = weights / mean_w
     return weights
+
+
+def build_balanced_sampler(dataset, num_classes=7, power=0.35):
+    """Build a WeightedRandomSampler from window labels in the dataset."""
+    if not getattr(dataset, "samples", None):
+        return None
+
+    labels = [int(s.get("label", 0)) for s in dataset.samples]
+    counts = Counter(labels)
+    if not counts:
+        return None
+
+    class_weights = {
+        cls_idx: (1.0 / max(counts.get(cls_idx, 1), 1)) ** power
+        for cls_idx in range(num_classes)
+    }
+    sample_weights = torch.tensor(
+        [class_weights.get(lbl, 1.0) for lbl in labels],
+        dtype=torch.double,
+    )
+    return WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True,
+    )
 
 
 def compute_binary_metrics(all_labels, all_preds, all_probs=None):
@@ -185,13 +215,36 @@ def train_video_window(config, full_train=False):
         print(f"       Val dataset:   {len(val_dataset)} windows")
     print(f"       Datasets built in {time.time()-t_dataset:.1f}s.")
 
+    num_workers = int(w_conf.get('num_workers', 4))
+    use_balanced_sampler = bool(w_conf.get('use_balanced_sampler', False))
+    sampler_power = float(w_conf.get('balanced_sampler_power', 0.35))
+
+    train_sampler = None
+    if use_balanced_sampler:
+        train_sampler = build_balanced_sampler(
+            train_dataset,
+            num_classes=num_classes,
+            power=sampler_power,
+        )
+        if train_sampler is not None:
+            print(f"       Balanced sampler: enabled (power={sampler_power})")
+        else:
+            print("       Balanced sampler: requested but unavailable, falling back to shuffle")
+
     train_loader = DataLoader(
-        train_dataset, batch_size=w_conf['batch_size'],
-        shuffle=True, num_workers=4, pin_memory=True
+        train_dataset,
+        batch_size=w_conf['batch_size'],
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        num_workers=num_workers,
+        pin_memory=True,
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=w_conf['batch_size'],
-        shuffle=False, num_workers=4, pin_memory=True
+        val_dataset,
+        batch_size=w_conf['batch_size'],
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
     )
     print(f"       Train batches: {len(train_loader)}")
     if not full_train:
@@ -211,14 +264,25 @@ def train_video_window(config, full_train=False):
 
     # Class weights
     use_weights = w_conf.get('class_weights', 'inverse_frequency')
+    class_weight_power = float(w_conf.get('class_weight_power', 1.0))
     if use_weights == 'inverse_frequency':
-        weights = compute_class_weights(train_label_indices, num_classes).to(device)
-        print(f"       Class weights: {[f'{w:.3f}' for w in weights.tolist()]}")
+        weights = compute_class_weights(
+            train_label_indices,
+            num_classes=num_classes,
+            power=class_weight_power,
+        ).to(device)
+        print(
+            f"       Class weights: {[f'{w:.3f}' for w in weights.tolist()]} "
+            f"(power={class_weight_power})"
+        )
         criterion = nn.CrossEntropyLoss(weight=weights)
     else:
         criterion = nn.CrossEntropyLoss()
 
-    optimizer = optim.Adam(model.parameters(), lr=w_conf['lr'])
+    weight_decay = float(w_conf.get('weight_decay', 0.0))
+    optimizer = optim.Adam(model.parameters(), lr=w_conf['lr'], weight_decay=weight_decay)
+    if weight_decay > 0:
+        print(f"       Weight decay: {weight_decay}")
 
     use_amp = device.type == 'cuda'
     scaler = GradScaler(enabled=use_amp)

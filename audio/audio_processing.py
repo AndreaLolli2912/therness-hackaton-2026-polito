@@ -365,6 +365,42 @@ class WeldModel(nn.Module):
         self.preprocess = AudioTransform(cfg)
         self.backbone = backbone
 
+    def forward_features(self, waveforms):
+        x = self.preprocess(waveforms)
+        return self.backbone.extract_features(x)
+
+    def forward_activations(self, waveforms):
+        x = self.preprocess(waveforms)
+        return self.backbone.extract_activations(x)
+
     def forward(self, waveforms):
         x = self.preprocess(waveforms)
         return self.backbone(x)
+
+
+class WeldBackboneModel(nn.Module):
+    """WeldModel variant that exposes all backbone activations for fusion.
+
+    Uses AudioCNNBackbone under the hood.
+
+    forward(waveforms)                        → (B, num_classes) logits
+    forward(waveforms, return_features=True)  → dict with all layer activations + logits
+    forward_features(waveforms)               → (B, 128) embedding
+    """
+
+    def __init__(self, backbone, cfg=None):
+        super().__init__()
+        self.preprocess = AudioTransform(cfg)
+        self.backbone = backbone
+
+    def forward(self, waveforms, return_features=False):
+        x = self.preprocess(waveforms)
+        return self.backbone(x, return_features=return_features)
+
+    def forward_features(self, waveforms):
+        x = self.preprocess(waveforms)
+        return self.backbone.extract_features(x)
+
+    def forward_activations(self, waveforms):
+        x = self.preprocess(waveforms)
+        return self.backbone(x, return_features=True)

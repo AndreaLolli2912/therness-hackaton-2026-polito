@@ -1,7 +1,6 @@
 {
   "project_name": "therness-welding-hackathon",
-  "train_data_root": "/root/data/train_data",
-  "test_data_root": "/root/data/test_data",
+  "data_root": "/data1/malto/therness/data/Hackathon",
   "num_classes": 7,
   "device": "auto",
   "video": {
@@ -10,68 +9,31 @@
       "pretrained": true
     },
     "training": {
-      "epochs": 20,
-      "batch_size": 32,
-      "lr": 0.001,
-      "seq_len": 25,
-      "frame_skip": 3,
+      "epochs": 3,
+      "batch_size": 16,
+      "lr": 0.0001,
+      "seq_len": 15,
+      "frame_skip": 5,
       "metric": "hackathon_combined",
       "class_weights": "inverse_frequency",
       "split_strategy": "group_shuffle",
-      "checkpoint_path": "checkpoints/video/gru_classifier_sprint.pth"
+      "checkpoint_path": "checkpoints/video/gru_classifier.pth"
     }
   },
   "video_window": {
     "model": {
-      "pretrained": true,
-      "dropout": 0.12
+      "pretrained": true
     },
     "training": {
-      "epochs": 70,
+      "epochs": 3,
       "batch_size": 32,
       "lr": 0.0001,
-      "weight_decay": 5e-05,
-      "num_frames": 12,
-      "clip_seconds": null,
-      "img_size": 160,
-      "frames_dir": "data/video_frames",
-      "seed": 42,
-      "num_workers": 4,
+      "window_size": 8,
+      "window_stride": 4,
       "metric": "hackathon_combined",
       "class_weights": "inverse_frequency",
-      "class_weight_power": 1.0,
       "split_strategy": "group_shuffle",
-      "patience": 20,
-      "lr_schedule": {
-        "warmup_ratio": 0.1,
-        "plateau_factor": 0.5,
-        "plateau_patience": 4,
-        "plateau_threshold": 0.001,
-        "plateau_min_lr": 1e-06
-      },
-      "checkpoint_dir": "checkpoints/video",
-      "checkpoint_path": "checkpoints/video/window_classifier.pth",
-      "use_balanced_sampler": true,
-      "balanced_sampler_power": 0.35
-    }
-  },
-  "fusion": {
-    "model": {
-      "audio_dim": 128,
-      "video_dim": 128,
-      "hidden_dim": 192,
-      "dropout": 0.2
-    },
-    "training": {
-      "num_epochs": 90,
-      "lr": 0.0001,
-      "weight_decay": 0.0001,
-      "batch_size": 64,
-      "val_split": 0.2,
-      "seed": 42,
-      "patience": 22,
-      "good_weld_idx": 0,
-      "checkpoint_dir": "checkpoints/fusion"
+      "checkpoint_path": "checkpoints/video/window_classifier.pth"
     }
   },
   "audio": {
@@ -90,8 +52,8 @@
       "dropout": 0.15
     },
     "training": {
-      "train_fraction": 1.0,
-      "num_epochs": 70,
+      "train_fraction": 0.08,
+      "num_epochs": 1,
       "lr": 7e-05,
       "weight_decay": 3e-05,
       "lr_schedule": {
@@ -101,14 +63,14 @@
         "plateau_threshold": 0.001,
         "plateau_min_lr": 1e-06
       },
-      "patience": 18,
+      "patience": 1,
       "val_split": 0.2,
       "seed": 42,
-      "num_workers": 4,
+      "num_workers": 2,
       "task": "multiclass",
       "sequence_mil": {
         "enabled": true,
-        "batch_size": 8,
+        "batch_size": 4,
         "topk_ratio_pos": 0.12,
         "topk_ratio_neg": 0.2,
         "eval_pool_ratio": 0.12,
@@ -122,7 +84,7 @@
         "balanced_sampler_power": 0.35
       },
       "metric": "macro_f1",
-      "checkpoint_dir": "checkpoints/audio_multiclass"
+      "checkpoint_dir": "checkpoints/compat_multiclass"
     }
   }
 }
