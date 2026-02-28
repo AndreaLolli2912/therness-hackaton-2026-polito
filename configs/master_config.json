@@ -1,6 +1,6 @@
 {
   "project_name": "therness-welding-hackathon",
-  "data_root": "../dataset",
+  "data_root": "/data1/malto/therness/data/Hackathon",
   "num_classes": 7,
   "device": "auto",
   "video": {
@@ -27,7 +27,7 @@
     "training": {
       "epochs": 3,
       "batch_size": 32,
-      "lr": 1e-4,
+      "lr": 0.0001,
       "window_size": 8,
       "window_stride": 4,
       "metric": "hackathon_combined",
@@ -76,7 +76,12 @@
         "eval_pool_ratio": 0.12,
         "auto_threshold": true,
         "threshold": 0.5,
-        "good_window_weight": 0.0
+        "good_window_weight": 0.0,
+        "use_class_weights": true,
+        "class_weight_power": 0.5,
+        "multiclass_eval_mode": "topk_per_class",
+        "use_balanced_sampler": false,
+        "balanced_sampler_power": 0.35
       },
       "metric": "macro_f1",
       "checkpoint_dir": "checkpoints/audio_multiclass"

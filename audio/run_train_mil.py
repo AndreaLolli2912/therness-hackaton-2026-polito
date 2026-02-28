@@ -146,14 +146,30 @@ def _aggregate_topk_multiclass(probs_per_file, labels, topk_ratio):
     return torch.stack(bag_probs, dim=0)               # (B, C)
 
 
-def _predict_multiclass_file(probs_per_file, eval_pool_ratio):
-    """Mean-pool over all windows → return (B,) predicted class indices and (B, C) probs."""
+def _predict_multiclass_file(probs_per_file, eval_pool_ratio, mode="topk_per_class"):
+    """Predict file class from per-window class probabilities.
+
+    Modes:
+      - "mean": mean-pool over windows per class.
+      - "topk_per_class": for each class c, score by mean(top-k P(c));
+        better for localized defects under MIL.
+    """
     preds, mean_probs_list = [], []
     for probs in probs_per_file:
-        # Mean over ALL windows (robust for inference)
-        mean_p = probs.mean(dim=0)        # (C,)
-        mean_probs_list.append(mean_p)
-        preds.append(mean_p.argmax())
+        if mode == "mean":
+            class_scores = probs.mean(dim=0)  # (C,)
+        elif mode == "topk_per_class":
+            num_windows = probs.shape[0]
+            k = max(1, int(math.ceil(eval_pool_ratio * float(num_windows))))
+            k = min(k, int(num_windows))
+            topk_vals, _ = torch.topk(probs, k=k, dim=0)  # (k, C)
+            class_scores = topk_vals.mean(dim=0)          # (C,)
+        else:
+            raise ValueError(f"Unknown multiclass pred mode: {mode}")
+
+        probs_norm = class_scores / class_scores.sum().clamp(min=1e-8)
+        mean_probs_list.append(probs_norm)
+        preds.append(class_scores.argmax())
     return torch.stack(preds), torch.stack(mean_probs_list)
 
 
@@ -334,6 +350,7 @@ def train_epoch_mil_multiclass(
     optimizer,
     device,
     topk_ratio=0.05,
+    class_weights=None,
     warmup_steps=0,
     global_step=0,
     base_lrs=None,
@@ -366,7 +383,7 @@ def train_epoch_mil_multiclass(
 
         with torch.amp.autocast("cuda", enabled=False):
             log_bag = bag_probs.float().clamp(min=1e-8).log()
-            loss    = F.nll_loss(log_bag, labels)
+            loss    = F.nll_loss(log_bag, labels, weight=class_weights)
 
         if scaler is not None and device.type == "cuda":
             scaler.scale(loss).backward()
@@ -396,6 +413,8 @@ def validate_epoch_mil_multiclass(
     dataloader,
     device,
     eval_pool_ratio=0.05,
+    class_weights=None,
+    pred_mode="topk_per_class",
 ):
     """MIL validation for multiclass: mean-pool all windows → argmax."""
     model.eval()
@@ -416,10 +435,14 @@ def validate_epoch_mil_multiclass(
             # Loss: top-k aggregation with true label (teacher-forced at val time)
             bag_probs = _aggregate_topk_multiclass(seq_probs, labels, eval_pool_ratio)
             log_bag   = bag_probs.float().clamp(min=1e-8).log()
-            loss      = F.nll_loss(log_bag, labels)
+            loss      = F.nll_loss(log_bag, labels, weight=class_weights)
 
-            # Prediction: mean pool (no label info)
-            preds, _ = _predict_multiclass_file(seq_probs, eval_pool_ratio)
+            # Prediction: class-agnostic file prediction (no true label info)
+            preds, _ = _predict_multiclass_file(
+                seq_probs,
+                eval_pool_ratio=eval_pool_ratio,
+                mode=pred_mode,
+            )
 
             all_targets.append(labels.cpu())
             all_preds.append(preds.cpu())
@@ -460,6 +483,8 @@ def run_training_mil(
     eval_pool_ratio=0.05,
     auto_threshold=True,
     good_window_weight=0.0,
+    class_weights_multiclass=None,
+    multiclass_pred_mode="topk_per_class",
     threshold=0.5,
     checkpoint_dir="checkpoints",
     plateau_scheduler=None,
@@ -502,6 +527,7 @@ def run_training_mil(
             train_result = train_epoch_mil_multiclass(
                 model=model, dataloader=train_loader, optimizer=optimizer,
                 device=device, topk_ratio=topk_ratio_pos,
+                class_weights=class_weights_multiclass,
                 warmup_steps=warmup_steps, global_step=global_step,
                 base_lrs=base_lrs, scaler=scaler,
             )
@@ -521,6 +547,8 @@ def run_training_mil(
             val_result = validate_epoch_mil_multiclass(
                 model=model, dataloader=val_loader, device=device,
                 eval_pool_ratio=eval_pool_ratio,
+                class_weights=class_weights_multiclass,
+                pred_mode=multiclass_pred_mode,
             )
 
         train_loss = train_result["loss"]

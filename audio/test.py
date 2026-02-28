@@ -42,6 +42,7 @@ def run_test_mil(
     eval_pool_ratio=0.05,
     threshold=0.5,
     auto_threshold=False,
+    multiclass_eval_mode="topk_per_class",
 ):
     """Evaluate MIL model on a file-level dataloader using saved checkpoint.
 
@@ -71,6 +72,7 @@ def run_test_mil(
             dataloader=dataloader,
             device=device,
             eval_pool_ratio=eval_pool_ratio,
+            pred_mode=multiclass_eval_mode,
         )
 
 
