@@ -31,7 +31,7 @@ class WeldingWindowDataset(Dataset):
     """
 
     def __init__(self, video_paths, labels, window_size=8, window_stride=4,
-                 transform=None, data_root=None):
+                 transform=None, data_root=None, load_features=False):
         """
         Args:
             video_paths: list of paths to .avi files
@@ -40,9 +40,13 @@ class WeldingWindowDataset(Dataset):
             window_stride: step between consecutive window starts
             transform:   torchvision transform for individual frames
             data_root:   optional root to save/load .video_metadata.json cache
+            load_features: if True, load pre-computed .npy instead of video
         """
         self.window_size = window_size
+        self.window_stride = window_stride
         self.transform = transform
+        self.data_root = data_root
+        self.load_features = load_features
         self.samples = []  # list of {video_path, start_frame, label}
 
         self.label_map = {
@@ -148,6 +152,32 @@ class WeldingWindowDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
+        
+        # Fast path: load pre-extracted 1D features
+        if self.load_features and self.data_root:
+            rel_path = os.path.relpath(sample["video_path"], self.data_root)
+            npy_name = rel_path.replace(os.sep, "_").replace(".avi", ".npy")
+            npy_path = os.path.join(self.data_root, "window_features", npy_name)
+            
+            try:
+                # Shape: [Total_Frames, 576]
+                feats = np.load(npy_path)
+            except Exception:
+                # Fallback to zeros (e.g. if extraction missing/corrupt)
+                feats = np.zeros((sample["total_frames"] or self.window_size, 576), dtype=np.float32)
+                
+            start = sample["start_frame"]
+            end = start + self.window_size
+            
+            if feats.shape[0] < self.window_size:
+                pad_len = self.window_size - feats.shape[0]
+                pad = np.zeros((pad_len, 576), dtype=np.float32)
+                feats = np.vstack([feats, pad])
+                
+            window_feat = feats[start:end] # [window_size, 576]
+            return torch.from_numpy(window_feat), sample["label"]
+
+        # Slow path: extract CNN frames dynamically (slow over Google Drive)
         cap = cv2.VideoCapture(sample["video_path"])
         cap.set(cv2.CAP_PROP_POS_FRAMES, sample["start_frame"])
 
@@ -179,10 +209,12 @@ class WeldingFileDataset(Dataset):
     """
 
     def __init__(self, video_paths, labels, window_size=8, window_stride=4,
-                 transform=None, data_root=None):
+                 transform=None, data_root=None, load_features=False):
         self.window_size = window_size
         self.window_stride = window_stride
         self.transform = transform
+        self.data_root = data_root
+        self.load_features = load_features
 
         self.label_map = {
             "00": 0, "01": 1, "02": 2, "06": 3, "07": 4, "08": 5, "11": 6
@@ -274,6 +306,37 @@ class WeldingFileDataset(Dataset):
         path = self.files[idx]
         total = self._frame_counts[idx]
         n_win = self._num_windows(total)
+        
+        if self.load_features and self.data_root:
+            rel_path = os.path.relpath(path, self.data_root)
+            npy_name = rel_path.replace(os.sep, "_").replace(".avi", ".npy")
+            npy_path = os.path.join(self.data_root, "window_features", npy_name)
+            
+            try:
+                feats = np.load(npy_path)
+            except Exception:
+                feats = np.zeros((total or self.window_size, 576), dtype=np.float32)
+                
+            all_windows = []
+            for w in range(n_win):
+                start = w * self.window_stride
+                end = start + self.window_size
+                
+                # We do the padding inside the loop instead of modifying `feats` array to avoid accumulating pad in memory
+                f_slice = feats[start:end]
+                if f_slice.shape[0] < self.window_size:
+                    pad_len = self.window_size - f_slice.shape[0]
+                    pad = np.zeros((pad_len, 576), dtype=np.float32)
+                    f_slice = np.vstack([f_slice, pad])
+                    
+                all_windows.append(torch.from_numpy(f_slice))
+                
+            windows_tensor = torch.stack(all_windows) # [n_win, window_size, 576]
+            return {
+                "windows": windows_tensor,
+                "num_windows": n_win,
+                "label": self.labels[idx],
+            }
 
         cap = cv2.VideoCapture(path)
         all_windows = []
