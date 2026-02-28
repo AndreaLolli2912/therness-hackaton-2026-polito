@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 
 from audio.train import validate_epoch
-from audio.run_train_mil import validate_epoch_mil
+from audio.run_train_mil import validate_epoch_mil, validate_epoch_mil_multiclass
 
 
 def run_test(model, dataloader, criterion, device, checkpoint_path):
@@ -34,32 +34,46 @@ def run_test_mil(
     dataloader,
     device,
     checkpoint_path,
-    defect_idx,
-    good_idx,
+    task="binary",
+    defect_idx=0,
+    good_idx=1,
     topk_ratio_pos=0.05,
     topk_ratio_neg=0.2,
     eval_pool_ratio=0.05,
     threshold=0.5,
     auto_threshold=False,
+    multiclass_eval_mode="topk_per_class",
 ):
-    """Evaluate MIL model on a file-level dataloader using saved checkpoint."""
+    """Evaluate MIL model on a file-level dataloader using saved checkpoint.
+
+    Works for both binary and multiclass tasks.
+    """
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
 
-    eval_threshold = float(checkpoint.get("threshold", threshold))
-    return validate_epoch_mil(
-        model=model,
-        dataloader=dataloader,
-        device=device,
-        defect_idx=defect_idx,
-        good_idx=good_idx,
-        topk_ratio_pos=topk_ratio_pos,
-        topk_ratio_neg=topk_ratio_neg,
-        eval_pool_ratio=eval_pool_ratio,
-        threshold=eval_threshold,
-        auto_threshold=auto_threshold,
-    )
+    if task == "binary":
+        eval_threshold = float(checkpoint.get("threshold", threshold))
+        return validate_epoch_mil(
+            model=model,
+            dataloader=dataloader,
+            device=device,
+            defect_idx=defect_idx,
+            good_idx=good_idx,
+            topk_ratio_pos=topk_ratio_pos,
+            topk_ratio_neg=topk_ratio_neg,
+            eval_pool_ratio=eval_pool_ratio,
+            threshold=eval_threshold,
+            auto_threshold=auto_threshold,
+        )
+    else:
+        return validate_epoch_mil_multiclass(
+            model=model,
+            dataloader=dataloader,
+            device=device,
+            eval_pool_ratio=eval_pool_ratio,
+            pred_mode=multiclass_eval_mode,
+        )
 
 
 def generate_submission(

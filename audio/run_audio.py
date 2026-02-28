@@ -21,7 +21,7 @@ from collections import Counter
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 
 from audio_model import AudioCNN
@@ -199,6 +199,13 @@ def main():
         glob.glob(os.path.join(data_root, "**", "*.flac"), recursive=True)
     )
 
+    if len(all_files) == 0:
+        raise FileNotFoundError(
+            "No .flac files found under data_root. "
+            f"Configured data_root='{data_root}'. "
+            "Check mount/path permissions and re-run Cell 2 to refresh config."
+        )
+
     random.seed(seed)
     random.shuffle(all_files)
 
@@ -206,6 +213,12 @@ def main():
     train_fraction = train_cfg.get("train_fraction", 1.0)
     if train_fraction < 1.0:
         all_files = all_files[:int(len(all_files) * train_fraction)]
+
+    if len(all_files) == 0:
+        raise ValueError(
+            "Dataset became empty after applying train_fraction. "
+            f"train_fraction={train_fraction}. Increase it above 0.0."
+        )
 
     task = train_cfg.get("task", "multiclass")
     use_material = train_cfg.get("use_material", False)
@@ -233,6 +246,13 @@ def main():
         val_files = all_files[:val_size]
         train_files = all_files[val_size:]
         print("Split strategy: random (fallback, insufficient class counts for stratify)")
+
+    if len(train_files) == 0 or len(val_files) == 0:
+        raise ValueError(
+            "Train/val split produced an empty set. "
+            f"train={len(train_files)}, val={len(val_files)}, val_split={val_split}. "
+            "Adjust val_split or train_fraction."
+        )
 
     print(f"Train welds: {len(train_files)} | Val welds: {len(val_files)}")
     print(
@@ -290,10 +310,37 @@ def main():
     cfg["label_to_idx"] = train_dataset.label_to_idx
     cfg["idx_to_label"] = train_dataset.idx_to_label
 
+    train_sampler = None
+    if mil_enabled and task == "multiclass":
+        use_balanced_sampler = bool(mil_cfg.get("use_balanced_sampler", False))
+        balanced_sampler_power = float(mil_cfg.get("balanced_sampler_power", 0.35))
+        if use_balanced_sampler:
+            class_counts_for_sampler = Counter(infer_file_label(p, data_root, task) for p in train_files)
+            inv_freq = {
+                label_name: (float(count) + 1e-6) ** (-balanced_sampler_power)
+                for label_name, count in class_counts_for_sampler.items()
+            }
+            sample_weights = [
+                inv_freq[infer_file_label(path, data_root, task)]
+                for path in train_dataset.files
+            ]
+            train_sampler = WeightedRandomSampler(
+                weights=torch.tensor(sample_weights, dtype=torch.double),
+                num_samples=len(sample_weights),
+                replacement=True,
+            )
+            print(
+                "Multiclass balanced sampler enabled | "
+                f"power={balanced_sampler_power}"
+            )
+
     if mil_enabled:
         mil_batch_size = int(mil_cfg.get("batch_size", 8))
         train_loader = DataLoader(
-            train_dataset, batch_size=mil_batch_size, shuffle=True,
+            train_dataset,
+            batch_size=mil_batch_size,
+            shuffle=(train_sampler is None),
+            sampler=train_sampler,
             num_workers=train_cfg["num_workers"], collate_fn=mil_collate_fn,
         )
         val_loader = DataLoader(
@@ -322,8 +369,30 @@ def main():
             f"eval_pool_ratio={mil_cfg.get('eval_pool_ratio', 0.05)} | "
             f"auto_threshold={mil_cfg.get('auto_threshold', True)} | "
             f"threshold={mil_cfg.get('threshold', 0.5)} | "
-            f"good_window_weight={mil_cfg.get('good_window_weight', 0.0)}"
+            f"good_window_weight={mil_cfg.get('good_window_weight', 0.0)} | "
+            f"multiclass_eval_mode={mil_cfg.get('multiclass_eval_mode', 'topk_per_class')}"
         )
+
+    multiclass_class_weights = None
+    if mil_enabled and task == "multiclass":
+        use_class_weights = bool(mil_cfg.get("use_class_weights", True))
+        class_weight_power = float(mil_cfg.get("class_weight_power", 0.5))
+        if use_class_weights:
+            class_counts = Counter(infer_file_label(p, data_root, task) for p in train_files)
+            class_weights = torch.ones(num_classes, dtype=torch.float32)
+            for label_name, idx in train_dataset.label_to_idx.items():
+                count = float(class_counts.get(label_name, 0.0))
+                class_weights[idx] = (count + 1e-6) ** (-class_weight_power)
+            class_weights = class_weights / class_weights.mean().clamp(min=1e-8)
+            multiclass_class_weights = class_weights.to(device)
+            printable = {
+                label_name: float(class_weights[idx].item())
+                for label_name, idx in train_dataset.label_to_idx.items()
+            }
+            print(
+                "Multiclass class-weighting enabled | "
+                f"power={class_weight_power} | weights={printable}"
+            )
 
     # ── Model (WeldModel = AudioTransform + AudioCNN) ───────────
     backbone = AudioCNN(num_classes=num_classes, dropout=model_cfg["dropout"])
@@ -367,10 +436,10 @@ def main():
     if args.test_only:
         assert args.checkpoint, "--checkpoint required for --test_only"
         if mil_enabled:
-            if task != "binary":
-                raise ValueError("MIL test_only currently supports binary task only.")
             label_to_idx = train_dataset.label_to_idx
-            if "defect" not in label_to_idx or "good_weld" not in label_to_idx:
+            defect_idx   = label_to_idx.get("defect", 0)
+            good_idx     = label_to_idx.get("good_weld", 1)
+            if task == "binary" and ("defect" not in label_to_idx or "good_weld" not in label_to_idx):
                 raise ValueError("binary task must contain labels 'defect' and 'good_weld'.")
 
             result = run_test_mil(
@@ -378,19 +447,22 @@ def main():
                 dataloader=val_loader,
                 device=device,
                 checkpoint_path=args.checkpoint,
-                defect_idx=label_to_idx["defect"],
-                good_idx=label_to_idx["good_weld"],
+                task=task,
+                defect_idx=defect_idx,
+                good_idx=good_idx,
                 topk_ratio_pos=float(mil_cfg.get("topk_ratio_pos", 0.05)),
                 topk_ratio_neg=float(mil_cfg.get("topk_ratio_neg", 0.2)),
                 eval_pool_ratio=float(mil_cfg.get("eval_pool_ratio", 0.05)),
                 threshold=float(mil_cfg.get("threshold", 0.5)),
                 auto_threshold=bool(mil_cfg.get("auto_threshold", False)),
+                multiclass_eval_mode=str(mil_cfg.get("multiclass_eval_mode", "topk_per_class")),
             )
             print(f"Val loss: {result['loss']:.4f}")
             print(f"Val macro F1: {result['macro_f1']:.4f}")
             print(f"Val accuracy: {result['accuracy']:.4f}")
-            print(f"Val AUC: {result['auc']:.4f}")
-            print(f"Threshold used: {result['threshold']:.2f}")
+            if task == "binary":
+                print(f"Val AUC: {result['auc']:.4f}")
+                print(f"Threshold used: {result['threshold']:.2f}")
         else:
             result = run_test(model, val_loader, criterion, device, args.checkpoint)
             print(f"Val loss: {result['loss']:.4f}")
@@ -406,10 +478,11 @@ def main():
     patience = train_cfg["patience"] if train_cfg["patience"] > 0 else None
 
     if mil_enabled:
-        if task != "binary":
-            raise ValueError("sequence_mil currently supports only binary task.")
         label_to_idx = train_dataset.label_to_idx
-        if "defect" not in label_to_idx or "good_weld" not in label_to_idx:
+        # Binary requires the two standard labels; multiclass works with any labels.
+        defect_idx = label_to_idx.get("defect", 0)
+        good_idx   = label_to_idx.get("good_weld", 1)
+        if task == "binary" and ("defect" not in label_to_idx or "good_weld" not in label_to_idx):
             raise ValueError("binary task must contain labels 'defect' and 'good_weld'.")
 
         history = run_training_mil(
@@ -419,13 +492,16 @@ def main():
             optimizer=optimizer,
             device=device,
             num_epochs=train_cfg["num_epochs"],
-            defect_idx=label_to_idx["defect"],
-            good_idx=label_to_idx["good_weld"],
+            task=task,
+            defect_idx=defect_idx,
+            good_idx=good_idx,
             topk_ratio_pos=float(mil_cfg.get("topk_ratio_pos", 0.05)),
             topk_ratio_neg=float(mil_cfg.get("topk_ratio_neg", 0.2)),
             eval_pool_ratio=float(mil_cfg.get("eval_pool_ratio", 0.05)),
             auto_threshold=bool(mil_cfg.get("auto_threshold", True)),
             good_window_weight=float(mil_cfg.get("good_window_weight", 0.0)),
+            class_weights_multiclass=multiclass_class_weights,
+            multiclass_pred_mode=str(mil_cfg.get("multiclass_eval_mode", "topk_per_class")),
             threshold=float(mil_cfg.get("threshold", 0.5)),
             checkpoint_dir=train_cfg["checkpoint_dir"],
             plateau_scheduler=plateau_scheduler,
