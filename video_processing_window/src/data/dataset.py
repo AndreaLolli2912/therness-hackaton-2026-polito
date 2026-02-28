@@ -403,7 +403,7 @@ def get_video_files_and_labels(data_root):
     video_data = []
     
     # Priority folders to scan
-    target_dirs = ["good_weld", "defect_data_weld"]
+    target_dirs = ["good_weld", "defect-weld", "defect_data_weld"]
     scan_roots = []
     
     for d in target_dirs:
