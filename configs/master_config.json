@@ -3,7 +3,6 @@
   "data_root": "/data1/malto/therness/data/Hackathon",
   "num_classes": 7,
   "device": "auto",
-
   "video": {
     "model": {
       "hidden_size": 128,
@@ -12,14 +11,13 @@
     "training": {
       "epochs": 3,
       "batch_size": 16,
-      "lr": 1e-4,
+      "lr": 0.0001,
       "seq_len": 15,
       "frame_skip": 5,
       "metric": "macro_f1",
       "checkpoint_path": "checkpoints/video_classifier.pth"
     }
   },
-
   "audio": {
     "feature_params": {
       "sampling_rate": 16000,
@@ -29,43 +27,41 @@
       "n_mels": 40,
       "f_min": 0,
       "f_max": 8000,
-      "chunk_length_in_s": 1,
-      "max_length_in_s": 38.0,
+      "chunk_length_in_s": 1.0,
       "normalize": true
     },
     "model": {
       "dropout": 0.15
     },
     "training": {
-      "train_fraction": 0.75,
-      "num_epochs": 45,
-      "batch_size": 64,
-      "lr": 3e-4,
-      "weight_decay": 1e-4,
+      "train_fraction": 1.0,
+      "num_epochs": 70,
+      "lr": 7e-05,
+      "weight_decay": 5e-05,
       "lr_schedule": {
         "warmup_ratio": 0.1,
         "plateau_factor": 0.5,
-        "plateau_patience": 3,
-        "plateau_threshold": 1e-3,
-        "plateau_min_lr": 1e-6
+        "plateau_patience": 4,
+        "plateau_threshold": 0.001,
+        "plateau_min_lr": 1e-06
       },
-      "patience": 10,
+      "patience": 18,
       "val_split": 0.2,
       "seed": 42,
       "num_workers": 4,
-      "task": "binary",
+      "task": "multiclass",
       "sequence_mil": {
         "enabled": true,
         "batch_size": 8,
-        "topk_ratio_pos": 0.05,
+        "topk_ratio_pos": 0.12,
         "topk_ratio_neg": 0.2,
-        "eval_pool_ratio": 0.05,
+        "eval_pool_ratio": 0.12,
         "auto_threshold": true,
         "threshold": 0.5,
-        "good_window_weight": 0.25
+        "good_window_weight": 0.0
       },
       "metric": "macro_f1",
-      "checkpoint_dir": "checkpoints/audio"
+      "checkpoint_dir": "checkpoints/audio_multiclass"
     }
   }
 }

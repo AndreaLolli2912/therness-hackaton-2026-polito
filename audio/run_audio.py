@@ -367,10 +367,10 @@ def main():
     if args.test_only:
         assert args.checkpoint, "--checkpoint required for --test_only"
         if mil_enabled:
-            if task != "binary":
-                raise ValueError("MIL test_only currently supports binary task only.")
             label_to_idx = train_dataset.label_to_idx
-            if "defect" not in label_to_idx or "good_weld" not in label_to_idx:
+            defect_idx   = label_to_idx.get("defect", 0)
+            good_idx     = label_to_idx.get("good_weld", 1)
+            if task == "binary" and ("defect" not in label_to_idx or "good_weld" not in label_to_idx):
                 raise ValueError("binary task must contain labels 'defect' and 'good_weld'.")
 
             result = run_test_mil(
@@ -378,8 +378,9 @@ def main():
                 dataloader=val_loader,
                 device=device,
                 checkpoint_path=args.checkpoint,
-                defect_idx=label_to_idx["defect"],
-                good_idx=label_to_idx["good_weld"],
+                task=task,
+                defect_idx=defect_idx,
+                good_idx=good_idx,
                 topk_ratio_pos=float(mil_cfg.get("topk_ratio_pos", 0.05)),
                 topk_ratio_neg=float(mil_cfg.get("topk_ratio_neg", 0.2)),
                 eval_pool_ratio=float(mil_cfg.get("eval_pool_ratio", 0.05)),
@@ -389,8 +390,9 @@ def main():
             print(f"Val loss: {result['loss']:.4f}")
             print(f"Val macro F1: {result['macro_f1']:.4f}")
             print(f"Val accuracy: {result['accuracy']:.4f}")
-            print(f"Val AUC: {result['auc']:.4f}")
-            print(f"Threshold used: {result['threshold']:.2f}")
+            if task == "binary":
+                print(f"Val AUC: {result['auc']:.4f}")
+                print(f"Threshold used: {result['threshold']:.2f}")
         else:
             result = run_test(model, val_loader, criterion, device, args.checkpoint)
             print(f"Val loss: {result['loss']:.4f}")
@@ -406,10 +408,11 @@ def main():
     patience = train_cfg["patience"] if train_cfg["patience"] > 0 else None
 
     if mil_enabled:
-        if task != "binary":
-            raise ValueError("sequence_mil currently supports only binary task.")
         label_to_idx = train_dataset.label_to_idx
-        if "defect" not in label_to_idx or "good_weld" not in label_to_idx:
+        # Binary requires the two standard labels; multiclass works with any labels.
+        defect_idx = label_to_idx.get("defect", 0)
+        good_idx   = label_to_idx.get("good_weld", 1)
+        if task == "binary" and ("defect" not in label_to_idx or "good_weld" not in label_to_idx):
             raise ValueError("binary task must contain labels 'defect' and 'good_weld'.")
 
         history = run_training_mil(
@@ -419,8 +422,9 @@ def main():
             optimizer=optimizer,
             device=device,
             num_epochs=train_cfg["num_epochs"],
-            defect_idx=label_to_idx["defect"],
-            good_idx=label_to_idx["good_weld"],
+            task=task,
+            defect_idx=defect_idx,
+            good_idx=good_idx,
             topk_ratio_pos=float(mil_cfg.get("topk_ratio_pos", 0.05)),
             topk_ratio_neg=float(mil_cfg.get("topk_ratio_neg", 0.2)),
             eval_pool_ratio=float(mil_cfg.get("eval_pool_ratio", 0.05)),
