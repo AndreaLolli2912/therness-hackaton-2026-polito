@@ -31,7 +31,7 @@ from audio_model import AudioCNNBackbone
 from audio.audio_processing import WeldBackboneModel, DEFAULT_AUDIO_CFG
 from models.video_backbone import VideoCNNBackbone
 from video.video_processing import WeldVideoModel
-from fusion.fusion_model import FusionModel, TemporalFusionModel
+from fusion.fusion_model import FusionModel, TemporalFusionModel, AttentionFusionModel
 from fusion.fusion_dataset import PrecomputedFusionDataset
 from fusion.train import fusion_collate_fn, train_epoch, validate_epoch
 
@@ -502,7 +502,7 @@ def main():
     print(f"Train: {len(train_files)} files | Val: {len(val_files)} files")
 
     fusion_arch = str(model_cfg.get("arch", "mlp")).lower()
-    use_temporal = fusion_arch in {"temporal", "gru", "sequence"}
+    use_temporal = fusion_arch in {"temporal", "gru", "sequence", "attention", "attn"}
     sequence_len = int(train_cfg.get("sequence_len", video_train_cfg.get("num_frames", 12)))
 
     # ── Extract embeddings/sequences ─────────────────────────────
@@ -578,7 +578,17 @@ def main():
     )
 
     # ── Fusion model ─────────────────────────────────────────────
-    if use_temporal:
+    if fusion_arch in {"attention", "attn"}:
+        fusion_model = AttentionFusionModel(
+            audio_dim=model_cfg.get("audio_dim", 128),
+            video_dim=model_cfg.get("video_dim", 128),
+            hidden_dim=model_cfg.get("hidden_dim", 128),
+            num_classes=num_classes,
+            dropout=model_cfg.get("dropout", 0.2),
+            num_heads=int(model_cfg.get("num_heads", 4)),
+            num_attn_layers=int(model_cfg.get("attn_layers", 2)),
+        ).to(device)
+    elif use_temporal:
         fusion_model = TemporalFusionModel(
             audio_dim=model_cfg.get("audio_dim", 128),
             video_dim=model_cfg.get("video_dim", 128),

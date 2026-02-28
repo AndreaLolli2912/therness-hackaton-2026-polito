@@ -146,3 +146,97 @@ class TemporalFusionModel(nn.Module):
             "p_defect": p_defect,
             "pred_class": pred_class,
         }
+
+
+class AttentionFusionModel(nn.Module):
+    """Per-window MLP fusion + self-attention pooling (no RNN).
+
+    Each time window is processed independently through an MLP that fuses
+    audio + video features, then multi-head self-attention captures
+    cross-window relationships.  Final prediction from mean-pooled
+    attended features — fully parallel, no sequential bottleneck.
+
+    Inputs:
+        audio_seq: (B, T, audio_dim)
+        video_seq: (B, T, video_dim)
+    Output:
+        logits: (B, num_classes)
+    """
+
+    def __init__(
+        self,
+        audio_dim: int = 128,
+        video_dim: int = 128,
+        hidden_dim: int = 128,
+        num_classes: int = 7,
+        dropout: float = 0.2,
+        num_heads: int = 4,
+        num_attn_layers: int = 2,
+    ):
+        super().__init__()
+
+        # Per-window projection + fusion (applied independently at each t)
+        self.audio_proj = nn.Linear(audio_dim, hidden_dim)
+        self.video_proj = nn.Linear(video_dim, hidden_dim)
+
+        self.step_fuser = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        # Learnable positional embedding for up to 64 windows
+        self.pos_emb = nn.Parameter(torch.randn(1, 64, hidden_dim) * 0.02)
+
+        # Transformer self-attention layers (no RNN)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,     # Pre-LN for better training stability
+        )
+        self.attn_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_attn_layers,
+        )
+        self.norm = nn.LayerNorm(hidden_dim)
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def forward(self, audio_seq, video_seq):
+        # audio_seq: (B, T, audio_dim), video_seq: (B, T, video_dim)
+        a = self.audio_proj(audio_seq)       # (B, T, hidden_dim)
+        v = self.video_proj(video_seq)       # (B, T, hidden_dim)
+        fused = self.step_fuser(torch.cat([a, v], dim=-1))  # (B, T, hidden_dim)
+
+        # Add positional embeddings
+        T = fused.size(1)
+        fused = fused + self.pos_emb[:, :T, :]
+
+        # Self-attention across time windows (fully parallel)
+        attended = self.attn_encoder(fused)  # (B, T, hidden_dim)
+        attended = self.norm(attended)
+
+        # Mean pool over time
+        pooled = attended.mean(dim=1)        # (B, hidden_dim)
+        return self.classifier(pooled)
+
+    def predict(self, audio_seq, video_seq, good_weld_idx: int = 0):
+        logits = self.forward(audio_seq, video_seq)
+        probs = torch.softmax(logits, dim=1)
+        p_defect = 1.0 - probs[:, good_weld_idx]
+        pred_class = probs.argmax(dim=1)
+        return {
+            "class_logits": logits,
+            "probs": probs,
+            "p_defect": p_defect,
+            "pred_class": pred_class,
+        }
