@@ -1,6 +1,6 @@
 {
   "project_name": "therness-welding-hackathon",
-  "data_root": "/data1/malto/therness/data/Hackathon",
+  "data_root": "../dataset",
   "num_classes": 7,
   "device": "auto",
   "video": {
