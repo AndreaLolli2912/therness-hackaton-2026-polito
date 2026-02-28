@@ -59,8 +59,13 @@ class InferenceConfig:
     )
 
     # ── Performance ──────────────────────────────────────────────
-    latency_target_ms: float = 200.0
+    latency_target_ms: float = 50.0      # Strict target per paper (<50ms)
+    latency_target_relaxed_ms: float = 200.0  # Relaxed target for full pipeline
     benchmark_frames: int = 100
+
+    # ── Edge deployment ──────────────────────────────────────────
+    quantized: bool = False              # Use INT8 quantized model
+    onnx_path: Optional[str] = None      # Path to ONNX model (if using ORT)
 
     # ── Label mappings ───────────────────────────────────────────
     label_map: Dict[int, str] = field(default_factory=lambda: dict(LABEL_MAP))

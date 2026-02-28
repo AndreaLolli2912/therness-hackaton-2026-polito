@@ -11,7 +11,6 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 import torch
-import torchaudio
 from torchvision import transforms
 
 from .models import (
@@ -77,7 +76,7 @@ class VideoStreamProcessor:
 
         with torch.no_grad():
             probs, self.hidden_state = self.model.predict_stream(
-                tensor.squeeze(0), self.hidden_state
+                tensor, self.hidden_state
             )
         return probs.squeeze(0).cpu().numpy()
 
@@ -101,54 +100,98 @@ class VideoStreamProcessor:
 
 class AudioStreamProcessor:
     """
-    Reads 0.5s audio chunks from a FLAC file and runs them through
-    AudioTransform → AudioCNN, returning per-chunk class probabilities.
+    Reads audio from a FLAC file and runs inference.
+
+    Supports two model types:
+    - **TorchScript** (e.g. deploy_single_label.pt): includes internal
+      preprocessing and chunking. We pass the full waveform once.
+    - **Raw AudioCNN + AudioTransform**: we chunk manually and
+      pass mel spectrograms.
     """
 
-    def __init__(self, model: AudioCNN, audio_transform: AudioTransform,
+    def __init__(self, model: torch.nn.Module, audio_transform,
                  source: str, device: torch.device, cfg: InferenceConfig):
         self.model = model
-        self.audio_transform = audio_transform.to(device)
+        self.audio_transform = audio_transform
         self.device = device
         self.cfg = cfg
 
-        # Load full waveform once (industrial FLAC files are ~38s)
-        waveform, sr = torchaudio.load(source)
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
+        # Load waveform with soundfile (avoids torchaudio backend issues)
+        import soundfile as sf
+        data, sr = sf.read(source)
+        if data.ndim > 1:
+            data = data.mean(axis=1)  # stereo → mono
 
         # Resample if needed
         if sr != cfg.audio_sample_rate:
+            import torchaudio
+            waveform = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
             resampler = torchaudio.transforms.Resample(sr, cfg.audio_sample_rate)
             waveform = resampler(waveform)
+        else:
+            waveform = torch.tensor(data, dtype=torch.float32).unsqueeze(0)
 
         self.waveform = waveform  # (1, total_samples)
-        self.chunk_samples = int(cfg.audio_chunk_length_s * cfg.audio_sample_rate)
-        self.total_chunks = self.waveform.shape[1] // self.chunk_samples
-        self._chunk_idx = 0
 
-        print(f"[audio] Loaded source: {source}  "
-              f"({self.total_chunks} chunks of {cfg.audio_chunk_length_s}s)")
+        # Detect if the model is TorchScript (handles its own chunking)
+        self.is_torchscript = isinstance(model, torch.jit.ScriptModule)
+
+        if self.is_torchscript:
+            # TorchScript model processes the full waveform internally
+            self.total_chunks = 1
+            self._result_cache = None
+        else:
+            # Manual chunking for raw AudioCNN
+            self.chunk_samples = int(cfg.audio_chunk_length_s * cfg.audio_sample_rate)
+            self.total_chunks = self.waveform.shape[1] // self.chunk_samples
+
+        self._chunk_idx = 0
+        duration = self.waveform.shape[1] / cfg.audio_sample_rate
+        mode = "TorchScript (full waveform)" if self.is_torchscript else f"{self.total_chunks} chunks"
+        print(f"[audio] Loaded source: {source}  ({duration:.1f}s, {mode})")
 
     def get_next(self) -> Optional[np.ndarray]:
         """
-        Get next 0.5s chunk, run through AudioTransform + AudioCNN.
         Returns 7-class probabilities or None when exhausted.
         """
         if self._chunk_idx >= self.total_chunks:
             return None
 
-        start = self._chunk_idx * self.chunk_samples
-        end = start + self.chunk_samples
-        chunk = self.waveform[:, start:end].unsqueeze(0).to(self.device)
         self._chunk_idx += 1
 
         with torch.no_grad():
-            mel = self.audio_transform(chunk)
-            logits = self.model(mel)
-            probs = torch.softmax(logits, dim=1)
+            if self.is_torchscript:
+                # TorchScript model runs on CPU (saved that way)
+                # and returns dict: {'label': int, 'p_defect': float}
+                wave = self.waveform  # keep on CPU
+                result = self.model(wave)
 
-        return probs.squeeze(0).cpu().numpy()
+                if isinstance(result, dict):
+                    # Binary model output → convert to 7-class probs
+                    p_defect = float(result.get("p_defect", 0.5))
+                    p_good = 1.0 - p_defect
+                    # class 0 = good_weld, classes 1-6 = defect types
+                    probs = np.zeros(self.cfg.num_classes, dtype=np.float32)
+                    probs[0] = p_good
+                    # Distribute defect probability uniformly across classes 1-6
+                    if self.cfg.num_classes > 1:
+                        probs[1:] = p_defect / (self.cfg.num_classes - 1)
+                    return probs
+                else:
+                    # Tensor output (unexpected but handled)
+                    probs = torch.softmax(result, dim=-1)
+                    if probs.dim() > 1 and probs.shape[0] > 1:
+                        probs = probs.mean(dim=0, keepdim=True)
+                    return probs.squeeze(0).cpu().numpy()
+            else:
+                # Manual chunking for raw AudioCNN
+                start = (self._chunk_idx - 1) * self.chunk_samples
+                end = start + self.chunk_samples
+                chunk = self.waveform[:, start:end].unsqueeze(0).to(self.device)
+                mel = self.audio_transform(chunk)
+                logits = self.model(mel)
+                probs = torch.softmax(logits, dim=1)
+                return probs.squeeze(0).cpu().numpy()
 
     @property
     def chunk_idx(self) -> int:
