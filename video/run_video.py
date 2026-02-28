@@ -48,6 +48,8 @@ def set_seed(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def compute_class_weights(labels, num_classes=7, power=1.0):
@@ -390,7 +392,11 @@ def main():
             print(f"No improvement for {epochs_without_improvement} epoch(s)")
 
         if patience and epochs_without_improvement >= patience:
-            print(f"\nEarly stopping at epoch {epoch + 1}")
+            print(f"\nEarly stopping (patience) at epoch {epoch + 1}")
+            break
+        target_threshold = w_conf.get("target_metric_threshold", None)
+        if target_threshold is not None and best_score >= target_threshold:
+            print(f"\nTarget metric reached ({best_score:.4f} >= {target_threshold}). Stopping at epoch {epoch + 1}")
             break
 
     print(f"\nTraining complete. Best epoch: {best_epoch} (score={best_score:.4f})")

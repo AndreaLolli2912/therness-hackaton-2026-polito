@@ -43,6 +43,8 @@ def set_seed(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def _aggregate_topk(prob_seq, topk_ratio):
@@ -492,6 +494,7 @@ def run_training_mil(
     base_lrs=None,
     patience=None,
     seed=42,
+    target_metric_threshold=None,
 ):
     set_seed(seed)
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -604,7 +607,10 @@ def run_training_mil(
             print(f"No improvement for {no_improve} epoch(s)")
 
         if patience is not None and no_improve >= patience:
-            print(f"\nEarly stopping at epoch {epoch + 1}")
+            print(f"\nEarly stopping (patience) at epoch {epoch + 1}")
+            break
+        if target_metric_threshold is not None and best_val_f1 >= target_metric_threshold:
+            print(f"\nTarget metric reached ({best_val_f1:.4f} >= {target_metric_threshold}). Stopping at epoch {epoch + 1}")
             break
 
     print(f"\nTraining complete. Best epoch: {best_epoch} (val_f1={best_val_f1:.4f})")
