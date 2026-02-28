@@ -8,25 +8,35 @@ Key improvements over baseline:
   - Combined hackathon score as the checkpoint metric:
       FinalScore = 0.6 * Binary_F1 + 0.4 * Type_MacroF1
 """
+import time
+_t0 = time.time()
+
+print("[1/8] Importing standard libraries...")
 import os
 import json
 import numpy as np
+from collections import Counter
 
+print("[2/8] Importing PyTorch...")
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 from torch.amp import autocast
+print(f"       PyTorch {torch.__version__} loaded.")
 
+print("[3/8] Importing scikit-learn...")
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import f1_score, classification_report, roc_auc_score
-from collections import Counter
+print(f"       scikit-learn loaded.")
 
+print("[4/8] Importing project modules...")
 from src.models.video_model import StreamingVideoClassifier
 from src.data.dataset import (
     WeldingSequenceDataset, get_video_transforms, get_video_files_and_labels,
 )
+print(f"       All imports done in {time.time()-_t0:.1f}s.\n")
 
 
 # ── Label mapping (index → code) ─────────────────────────────────
@@ -90,12 +100,25 @@ def train_video(config):
         device = torch.device(device)
 
     num_classes = config.get('num_classes', 7)
+    print(f"[5/8] Configuration loaded.")
+    print(f"       data_root:   {os.path.abspath(data_root)}")
+    print(f"       device:      {device}")
+    print(f"       num_classes: {num_classes}")
+    print(f"       epochs:      {v_conf['epochs']}")
+    print(f"       batch_size:  {v_conf['batch_size']}")
+    print(f"       lr:          {v_conf['lr']}")
+    print(f"       seq_len:     {v_conf['seq_len']}")
+    print(f"       frame_skip:  {v_conf['frame_skip']}")
 
     # ── 1. Discover files, labels, and groups ────────────────────
+    print(f"\n[6/8] Discovering video files in {os.path.abspath(data_root)}...")
+    t_discover = time.time()
     video_data = get_video_files_and_labels(data_root)
     if not video_data:
-        print(f"No video data found in {data_root}")
+        print(f"  ERROR: No video data found in {data_root}")
+        print(f"  Make sure the dataset folder contains good_weld/ and defect_data_weld/ subdirectories.")
         return
+    print(f"       Found {len(video_data)} videos in {time.time()-t_discover:.1f}s.")
 
     paths, labels, groups = zip(*video_data)
     paths = list(paths)
@@ -105,7 +128,15 @@ def train_video(config):
     # Convert label codes to indices
     label_indices = [CODE_TO_IDX.get(lbl, 0) for lbl in labels]
 
+    # Print class distribution
+    label_counts = Counter(labels)
+    print(f"       Class distribution:")
+    for code in sorted(label_counts.keys()):
+        idx = CODE_TO_IDX.get(code, '?')
+        print(f"         Code {code} (class {idx}): {label_counts[code]} videos")
+
     # ── 2. Group-aware split (prevents data leakage) ─────────────
+    print(f"\n       Splitting data with GroupShuffleSplit (no leakage)...")
     split_strategy = v_conf.get('split_strategy', 'group_shuffle')
 
     if split_strategy == 'group_shuffle':
@@ -128,15 +159,17 @@ def train_video(config):
     n_train_groups = len(set(groups[train_idx]))
     n_val_groups = len(set(groups[val_idx]))
     overlap = set(groups[train_idx]) & set(groups[val_idx])
-    print(f"Split: {len(train_paths)} train ({n_train_groups} groups), "
-          f"{len(val_paths)} val ({n_val_groups} groups), "
-          f"group overlap: {len(overlap)}")
+    print(f"       Split: {len(train_paths)} train ({n_train_groups} groups), "
+          f"{len(val_paths)} val ({n_val_groups} groups)")
+    print(f"       Group overlap: {len(overlap)} (should be 0)")
 
     if overlap:
-        print(f"WARNING: {len(overlap)} configuration folder(s) appear in both "
+        print(f"  WARNING: {len(overlap)} configuration folder(s) appear in both "
               f"train and val sets. Consider adjusting split strategy.")
 
     # ── 3. Prepare datasets ──────────────────────────────────────
+    print(f"\n[7/8] Building datasets and dataloaders...")
+    t_dataset = time.time()
     train_dataset = WeldingSequenceDataset(
         train_paths, train_labels,
         transform=get_video_transforms(),
@@ -149,6 +182,9 @@ def train_video(config):
         seq_len=v_conf['seq_len'],
         frame_skip=v_conf['frame_skip']
     )
+    print(f"       Train dataset: {len(train_dataset)} sequences")
+    print(f"       Val dataset:   {len(val_dataset)} sequences")
+    print(f"       Datasets built in {time.time()-t_dataset:.1f}s.")
 
     train_loader = DataLoader(
         train_dataset, batch_size=v_conf['batch_size'],
@@ -158,43 +194,60 @@ def train_video(config):
         val_dataset, batch_size=v_conf['batch_size'],
         shuffle=False, num_workers=4, pin_memory=True
     )
+    print(f"       Train batches: {len(train_loader)}")
+    print(f"       Val batches:   {len(val_loader)}")
 
     # ── 4. Initialize model ──────────────────────────────────────
+    print(f"\n[8/8] Initializing model...")
     model = StreamingVideoClassifier(
         num_classes=num_classes,
         hidden_size=m_conf['hidden_size'],
         pretrained=m_conf['pretrained']
     ).to(device)
 
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"       StreamingVideoClassifier loaded on {device}")
+    print(f"       Parameters: {n_params:,}")
+    print(f"       Pretrained backbone: {m_conf['pretrained']}")
+
     # Inverse-frequency class weights
     use_weights = v_conf.get('class_weights', 'inverse_frequency')
     if use_weights == 'inverse_frequency':
         weights = compute_class_weights(train_label_indices, num_classes).to(device)
-        print(f"Class weights: {weights.tolist()}")
+        print(f"       Class weights (inverse-freq): {[f'{w:.3f}' for w in weights.tolist()]}")
         criterion = nn.CrossEntropyLoss(weight=weights)
     else:
+        print(f"       Class weights: none (uniform)")
         criterion = nn.CrossEntropyLoss()
 
     optimizer = optim.Adam(model.parameters(), lr=v_conf['lr'])
 
     # Mixed precision scaler
-    scaler = GradScaler(enabled=(device.type == 'cuda'))
+    use_amp = device.type == 'cuda'
+    scaler = GradScaler(enabled=use_amp)
+    print(f"       Mixed precision (AMP): {'enabled' if use_amp else 'disabled'}")
 
     best_score = 0.0
     epochs = v_conf['epochs']
     checkpoint_path = v_conf['checkpoint_path']
 
-    print(f"\nStarting video training on {device}.")
-    print(f"Checkpoint metric: hackathon combined score "
-          f"(0.6 * Binary_F1 + 0.4 * Macro_F1)")
+    total_setup_time = time.time() - _t0
+    print(f"\n{'='*65}")
+    print(f"  TRAINING START — {epochs} epochs, setup took {total_setup_time:.1f}s")
+    print(f"  Checkpoint metric: 0.6 * Binary_F1 + 0.4 * Macro_F1")
+    print(f"  Best model saved to: {checkpoint_path}")
+    print(f"{'='*65}\n")
 
     for epoch in range(epochs):
+        epoch_start = time.time()
+
         # ── Training loop ────────────────────────────────────────
         model.train()
         train_loss = 0
         all_preds = []
         all_labels_epoch = []
 
+        print(f"━━━ Epoch {epoch+1}/{epochs} ━━━ TRAINING ━━━")
         for i, (sequences, batch_labels) in enumerate(train_loader):
             sequences, batch_labels = sequences.to(device), batch_labels.to(device)
 
@@ -212,23 +265,33 @@ def train_video(config):
             all_preds.extend(predicted.cpu().numpy())
             all_labels_epoch.extend(batch_labels.cpu().numpy())
 
-            if i % 10 == 0:
+            if i % 5 == 0:
+                avg_loss = train_loss / (i + 1)
                 iter_f1 = f1_score(
                     batch_labels.cpu().numpy(), predicted.cpu().numpy(),
                     average='macro', zero_division=0
                 )
-                print(f"Epoch [{epoch+1}/{epochs}], Step [{i}/{len(train_loader)}], "
-                      f"Loss: {loss.item():.4f}, Macro F1: {iter_f1:.4f}")
+                elapsed = time.time() - epoch_start
+                eta = elapsed / (i + 1) * (len(train_loader) - i - 1) if i > 0 else 0
+                print(f"  Step [{i+1:>4}/{len(train_loader)}] "
+                      f"Loss: {loss.item():.4f} (avg: {avg_loss:.4f}) "
+                      f"F1: {iter_f1:.3f} "
+                      f"[{elapsed:.0f}s elapsed, ~{eta:.0f}s remaining]")
 
         train_macro_f1 = f1_score(all_labels_epoch, all_preds, average='macro', zero_division=0)
         train_binary_f1, _ = compute_binary_metrics(all_labels_epoch, all_preds)
         train_hackathon = compute_hackathon_score(train_binary_f1, train_macro_f1)
+        train_time = time.time() - epoch_start
 
-        print(f"\n--- Epoch {epoch+1} Train Summary ---")
-        print(f"  Macro F1: {train_macro_f1:.4f} | Binary F1: {train_binary_f1:.4f} | "
-              f"Hackathon Score: {train_hackathon:.4f}")
+        print(f"\n  ── Epoch {epoch+1} Train Summary ({train_time:.1f}s) ──")
+        print(f"     Avg Loss:       {train_loss/len(train_loader):.4f}")
+        print(f"     Macro F1:       {train_macro_f1:.4f}")
+        print(f"     Binary F1:      {train_binary_f1:.4f}")
+        print(f"     Hackathon Score: {train_hackathon:.4f}")
 
         # ── Validation loop ──────────────────────────────────────
+        print(f"\n  ━━━ Epoch {epoch+1}/{epochs} ━━━ VALIDATION ━━━")
+        val_start = time.time()
         model.eval()
         val_loss = 0
         val_preds = []
@@ -236,7 +299,7 @@ def train_video(config):
         val_probs = []
 
         with torch.no_grad():
-            for sequences, batch_labels in val_loader:
+            for j, (sequences, batch_labels) in enumerate(val_loader):
                 sequences, batch_labels = sequences.to(device), batch_labels.to(device)
                 logits, _ = model(sequences)
                 loss = criterion(logits, batch_labels)
@@ -248,18 +311,24 @@ def train_video(config):
                 val_labels_list.extend(batch_labels.cpu().numpy())
                 val_probs.extend(probs.cpu().numpy())
 
+                if j % 5 == 0:
+                    print(f"  Val Step [{j+1:>4}/{len(val_loader)}]")
+
         avg_val_loss = val_loss / max(len(val_loader), 1)
         val_macro_f1 = f1_score(val_labels_list, val_preds, average='macro', zero_division=0)
         val_binary_f1, val_roc_auc = compute_binary_metrics(
             val_labels_list, val_preds, val_probs
         )
         val_hackathon = compute_hackathon_score(val_binary_f1, val_macro_f1)
+        val_time = time.time() - val_start
 
-        print(f"\n--- Epoch {epoch+1} Validation ---")
-        print(f"  Val Loss: {avg_val_loss:.4f}")
-        print(f"  Macro F1: {val_macro_f1:.4f} | Binary F1: {val_binary_f1:.4f} | "
-              f"ROC-AUC: {val_roc_auc if val_roc_auc else 'N/A'}")
-        print(f"  Hackathon Score: {val_hackathon:.4f}")
+        print(f"\n  ── Epoch {epoch+1} Validation Summary ({val_time:.1f}s) ──")
+        print(f"     Val Loss:       {avg_val_loss:.4f}")
+        print(f"     Macro F1:       {val_macro_f1:.4f}")
+        print(f"     Binary F1:      {val_binary_f1:.4f}")
+        print(f"     ROC-AUC:        {val_roc_auc if val_roc_auc else 'N/A'}")
+        print(f"     Hackathon Score: {val_hackathon:.4f}")
+        print()
         print(classification_report(val_labels_list, val_preds, digits=4, zero_division=0))
 
         # ── Checkpoint on best hackathon score ───────────────────
@@ -267,9 +336,22 @@ def train_video(config):
             best_score = val_hackathon
             os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"  ✓ Saved new best model (Hackathon Score: {best_score:.4f})")
+            print(f"  ✓ NEW BEST MODEL SAVED! (Hackathon Score: {best_score:.4f})")
+            print(f"    → {os.path.abspath(checkpoint_path)}")
+        else:
+            print(f"  ✗ No improvement (best={best_score:.4f}, current={val_hackathon:.4f})")
 
-    print(f"\nTraining complete. Best Val Hackathon Score: {best_score:.4f}")
+        epoch_total = time.time() - epoch_start
+        print(f"\n  Epoch {epoch+1} total time: {epoch_total:.1f}s")
+        print(f"{'─'*65}\n")
+
+    total_time = time.time() - _t0
+    print(f"{'='*65}")
+    print(f"  TRAINING COMPLETE")
+    print(f"  Best Val Hackathon Score: {best_score:.4f}")
+    print(f"  Model saved to: {os.path.abspath(checkpoint_path)}")
+    print(f"  Total time: {total_time:.1f}s")
+    print(f"{'='*65}")
 
 
 if __name__ == "__main__":
@@ -279,7 +361,10 @@ if __name__ == "__main__":
                         help="Path to master config")
     args = parser.parse_args()
 
+    print(f"Loading config from {args.config}...")
     with open(args.config, 'r') as f:
         config = json.load(f)
+    print(f"Config loaded: project={config.get('project_name', '?')}\n")
 
     train_video(config)
+
