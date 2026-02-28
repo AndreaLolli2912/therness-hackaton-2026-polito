@@ -10,9 +10,11 @@ import os
 import cv2
 import torch
 import numpy as np
+import concurrent.futures
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
+from tqdm import tqdm
 
 
 class WeldingWindowDataset(Dataset):
@@ -44,32 +46,45 @@ class WeldingWindowDataset(Dataset):
             "00": 0, "01": 1, "02": 2, "06": 3, "07": 4, "08": 5, "11": 6
         }
 
-        for path, code in zip(video_paths, labels):
+        # ── Parallel Frame Counting & Sample Discovery ──
+        print(f"       Checking {len(video_paths)} videos for windows (parallel)...")
+        
+        def process_one_video(item):
+            path, code = item
             if not os.path.exists(path):
-                continue
-
+                return []
+            
             cap = cv2.VideoCapture(path)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             cap.release()
-
+            
+            video_samples = []
             if total_frames < window_size:
-                # Video too short — use entire video as one window (will pad)
-                self.samples.append({
+                video_samples.append({
                     "video_path": path,
                     "start_frame": 0,
                     "total_frames": total_frames,
                     "label": self.label_map.get(code, 0),
                 })
-                continue
+            else:
+                for start_f in range(0, total_frames - window_size + 1, window_stride):
+                    video_samples.append({
+                        "video_path": path,
+                        "start_frame": start_f,
+                        "total_frames": total_frames,
+                        "label": self.label_map.get(code, 0),
+                    })
+            return video_samples
 
-            # Slide the window across frames
-            for start_f in range(0, total_frames - window_size + 1, window_stride):
-                self.samples.append({
-                    "video_path": path,
-                    "start_frame": start_f,
-                    "total_frames": total_frames,
-                    "label": self.label_map.get(code, 0),
-                })
+        # Use ThreadPoolExecutor for I/O bound tasks (opening/closing files)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            video_items = list(zip(video_paths, labels))
+            results = list(tqdm(executor.map(process_one_video, video_items), 
+                               total=len(video_items), desc="       Windexing", 
+                               leave=False, disable=len(video_items) < 100))
+        
+        for res in results:
+            self.samples.extend(res)
 
     def __len__(self):
         return len(self.samples)
@@ -205,15 +220,33 @@ def get_group_from_path(video_path: str) -> str:
 def get_video_files_and_labels(data_root):
     """
     Scan directory and return list of (video_path, label_code, group).
+    Optimized for Google Drive/Network mounts by scanning only labeled roots.
     """
     video_data = []
-    for root, dirs, files in os.walk(data_root):
-        for file in files:
-            if file.endswith('.avi'):
-                path = os.path.join(root, file)
-                run_id = os.path.splitext(file)[0]
-                parts = run_id.split('-')
-                label = parts[-1] if len(parts) > 1 else "00"
-                group = get_group_from_path(path)
-                video_data.append((path, label, group))
+    
+    # Priority folders to scan
+    target_dirs = ["good_weld", "defect_data_weld"]
+    scan_roots = []
+    
+    for d in target_dirs:
+        potential_path = os.path.join(data_root, d)
+        if os.path.isdir(potential_path):
+            scan_roots.append(potential_path)
+    
+    # If target dirs don't exist, fallback to scanning entire data_root
+    if not scan_roots:
+        scan_roots = [data_root]
+
+    for root_dir in scan_roots:
+        print(f"       Scanning {os.path.basename(root_dir)}...")
+        for root, dirs, files in os.walk(root_dir):
+            for file in files:
+                if file.lower().endswith('.avi'):
+                    path = os.path.join(root, file)
+                    run_id = os.path.splitext(file)[0]
+                    parts = run_id.split('-')
+                    label = parts[-1] if len(parts) > 1 else "00"
+                    group = get_group_from_path(path)
+                    video_data.append((path, label, group))
+                    
     return video_data
