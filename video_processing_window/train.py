@@ -172,7 +172,6 @@ def train_video_window(config, full_train=False):
         window_size=w_conf['window_size'],
         window_stride=w_conf['window_stride'],
         data_root=data_root,
-        load_features=True,
     )
     val_dataset = WeldingWindowDataset(
         val_paths, val_labels,
@@ -180,7 +179,6 @@ def train_video_window(config, full_train=False):
         window_size=w_conf['window_size'],
         window_stride=w_conf['window_stride'],
         data_root=data_root,
-        load_features=True,
     )
     print(f"       Train dataset: {len(train_dataset)} windows")
     if not full_train:
@@ -258,7 +256,7 @@ def train_video_window(config, full_train=False):
             windows, batch_labels = windows.to(device), batch_labels.to(device)
 
             with autocast('cuda'):
-                logits = model(windows, pre_extracted=True)
+                logits = model(windows)
                 loss = criterion(logits, batch_labels)
 
             optimizer.zero_grad()
@@ -315,7 +313,7 @@ def train_video_window(config, full_train=False):
             with torch.no_grad():
                 for j, (windows, batch_labels) in enumerate(val_loader):
                     windows, batch_labels = windows.to(device), batch_labels.to(device)
-                    logits = model(windows, pre_extracted=True)
+                    logits = model(windows)
                     loss = criterion(logits, batch_labels)
                     val_loss += loss.item()
 
