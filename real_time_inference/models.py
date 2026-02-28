@@ -192,11 +192,25 @@ def load_video_model(checkpoint_path: str, device: torch.device,
 
 def load_audio_model(checkpoint_path: str, device: torch.device,
                      num_classes: int = 7, dropout: float = 0.3
-                     ) -> AudioCNN:
-    """Load trained audio model weights and return in eval mode."""
+                     ) -> nn.Module:
+    """
+    Load trained audio model weights and return in eval mode.
+    Supports both TorchScript (.pt via torch.jit.save) and
+    raw state_dict (.pth) checkpoint formats.
+    """
+    # Try TorchScript first (e.g. deploy_single_label.pt)
+    try:
+        model = torch.jit.load(checkpoint_path, map_location=device)
+        model.to(device).eval()
+        print(f"[models] Audio model loaded (TorchScript) from {checkpoint_path}")
+        return model
+    except Exception:
+        pass
+
+    # Fall back to state_dict loading
     model = AudioCNN(num_classes=num_classes, dropout=dropout)
     state = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(state)
     model.to(device).eval()
-    print(f"[models] Audio model loaded from {checkpoint_path}")
+    print(f"[models] Audio model loaded (state_dict) from {checkpoint_path}")
     return model
