@@ -84,7 +84,7 @@ def compute_hackathon_score(binary_f1, macro_f1):
     return 0.6 * binary_f1 + 0.4 * macro_f1
 
 
-def train_video(config, full_train=False):
+def train_video(config, full_train=False, checkpoint=None):
     # Extract configs
     v_conf = config['video']['training']
     m_conf = config['video']['model']
@@ -112,6 +112,8 @@ def train_video(config, full_train=False):
     print(f"       full_train:  {full_train}")
     if full_train:
         print(f"       ⚠ FULL TRAINING MODE: using 100% of data, no validation")
+    if checkpoint:
+        print(f"       ⚠ RESUMING from checkpoint: {checkpoint}")
 
     # ── 1. Discover files, labels, and groups ────────────────────
     print(f"\n[6/8] Discovering video files in {os.path.abspath(data_root)}...")
@@ -221,6 +223,17 @@ def train_video(config, full_train=False):
     print(f"       StreamingVideoClassifier loaded on {device}")
     print(f"       Parameters: {n_params:,}")
     print(f"       Pretrained backbone: {m_conf['pretrained']}")
+
+    if "resume_from" in config.get('video', {}).get('training', {}):
+        checkpoint_path_to_load = config['video']['training']['resume_from']
+    else:
+        checkpoint_path_to_load = args.checkpoint if 'args' in locals() and hasattr(args, 'checkpoint') and args.checkpoint else None
+
+    if checkpoint_path_to_load and os.path.exists(checkpoint_path_to_load):
+        print(f"       Loading checkpoint from {checkpoint_path_to_load}...")
+        model.load_state_dict(torch.load(checkpoint_path_to_load, map_location=device))
+        print(f"       Checkpoint loaded successfully.")
+
 
     # Inverse-frequency class weights
     use_weights = v_conf.get('class_weights', 'inverse_frequency')
@@ -390,6 +403,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train video classifier with JSON config")
     parser.add_argument("--config", type=str, default="../configs/master_config.json",
                         help="Path to master config")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to .pth checkpoint to resume training from")
     parser.add_argument("--full", action="store_true",
                         help="Train on 100%% of data (no validation split). "
                              "Use for final submission model.")
@@ -400,4 +415,4 @@ if __name__ == "__main__":
         config = json.load(f)
     print(f"Config loaded: project={config.get('project_name', '?')}\n")
 
-    train_video(config, full_train=args.full)
+    train_video(config, full_train=args.full, checkpoint=args.checkpoint)

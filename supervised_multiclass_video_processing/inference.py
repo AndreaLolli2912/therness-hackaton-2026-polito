@@ -48,7 +48,12 @@ class WeldingInference:
         Returns numpy array of shape [num_classes] with class probabilities.
         """
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        input_tensor = self.video_transform(frame_rgb).unsqueeze(0).to(self.device)
+        
+        # Convert to PIL Image for torchvision transforms pipeline
+        from PIL import Image
+        pil_img = Image.fromarray(frame_rgb)
+        
+        input_tensor = self.video_transform(pil_img).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             logits, _ = self.video_model(input_tensor)

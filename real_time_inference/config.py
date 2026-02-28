@@ -43,6 +43,7 @@ class InferenceConfig:
     # ── Model hyperparameters (must match training) ──────────────
     num_classes: int = 7
     video_hidden_size: int = 128
+    video_window_size: int = 8  # Frames per window for non-GRU models
     audio_dropout: float = 0.3
 
     # ── Audio preprocessing (must match training) ────────────────
