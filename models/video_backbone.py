@@ -130,3 +130,25 @@ class VideoCNNBackbone(nn.Module):
         """Return (B, 128) temporal-pooled embedding."""
         acts = self.forward(x, return_features=True)
         return acts["embedding"]
+
+    def extract_per_frame_features(self, x):
+        """Return (B, N, 128) per-frame embeddings WITHOUT mean-pooling.
+
+        This is useful for temporal/attention fusion models that need
+        independent per-frame features rather than a single pooled vector.
+        """
+        if x.dim() == 4:
+            x = x.unsqueeze(1)  # (B, 1, 3, H, W)
+
+        B, N, C, H, W = x.shape
+        x = x.reshape(B * N, C, H, W)
+
+        x = self.stem(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+
+        x = self.global_pool(x)              # (B*N, 128, 1, 1)
+        x = torch.flatten(x, 1)              # (B*N, 128)
+        x = x.reshape(B, N, 128)             # (B, N, 128)
+        return x

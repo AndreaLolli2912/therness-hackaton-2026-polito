@@ -588,3 +588,7 @@ class WeldVideoModel(nn.Module):
 
     def forward_features(self, frames):
         return self.backbone.extract_features(frames)
+
+    def forward_per_frame_features(self, frames):
+        """Return (B, N, 128) per-frame embeddings before mean-pooling."""
+        return self.backbone.extract_per_frame_features(frames)

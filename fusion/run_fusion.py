@@ -375,17 +375,19 @@ def extract_video_sequences(model, files, video_train_cfg, device, sequence_len)
         while len(frames) < max(num_frames, sequence_len):
             frames.append(_normalize_bgr_frame(blank, img_size))
 
-        if len(frames) >= sequence_len:
-            idx = np.linspace(0, len(frames) - 1, sequence_len, dtype=int)
-            frames = [frames[i] for i in idx]
+        # Extract independent per-frame embeddings (single forward pass)
+        all_frames = torch.stack(frames).unsqueeze(0).to(device)  # (1, N_frames, 3, H, W)
+        per_frame = model.forward_per_frame_features(all_frames).squeeze(0).detach().cpu()  # (N_frames, 128)
 
-        step_embs = []
-        for t in range(sequence_len):
-            prefix = torch.stack(frames[: t + 1]).unsqueeze(0).to(device)  # (1,t+1,3,H,W)
-            emb = model.forward_features(prefix).squeeze(0).detach().cpu()  # (128,)
-            step_embs.append(emb)
+        # Resample to exactly sequence_len steps
+        if per_frame.size(0) >= sequence_len:
+            idx = torch.linspace(0, per_frame.size(0) - 1, steps=sequence_len).long()
+            step_embs = per_frame[idx]  # (sequence_len, 128)
+        else:
+            pad = per_frame.new_zeros(sequence_len - per_frame.size(0), 128)
+            step_embs = torch.cat([per_frame, pad], dim=0)
 
-        seqs.append(torch.stack(step_embs, dim=0))
+        seqs.append(step_embs)
 
     return torch.stack(seqs)  # (N, T, 128)
 
