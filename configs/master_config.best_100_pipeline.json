@@ -60,16 +60,17 @@
     "model": {
       "audio_dim": 128,
       "video_dim": 128,
-      "hidden_dim": 192,
-      "dropout": 0.2,
-      "arch": "temporal",
+      "hidden_dim": 256,
+      "dropout": 0.25,
+      "arch": "attention",
       "sequence_len": 12,
-      "temporal_layers": 1
+      "num_heads": 2,
+      "attn_layers": 2
     },
     "training": {
       "num_epochs": 100,
-      "lr": 0.0001,
-      "weight_decay": 0.0001,
+      "lr": 0.00010470272294668067,
+      "weight_decay": 8.269509567573889e-05,
       "batch_size": 64,
       "val_split": 0.2,
       "seed": 42,
@@ -92,13 +93,13 @@
       "normalize": true
     },
     "model": {
-      "dropout": 0.12
+      "dropout": 0.15
     },
     "training": {
       "train_fraction": 1.0,
       "num_epochs": 100,
-      "lr": 4.16554692634056e-05,
-      "weight_decay": 2.2848671008910937e-05,
+      "lr": 7e-05,
+      "weight_decay": 3e-05,
       "lr_schedule": {
         "warmup_ratio": 0.1,
         "plateau_factor": 0.5,
@@ -114,17 +115,17 @@
       "sequence_mil": {
         "enabled": true,
         "batch_size": 8,
-        "topk_ratio_pos": 0.18,
+        "topk_ratio_pos": 0.12,
         "topk_ratio_neg": 0.2,
-        "eval_pool_ratio": 0.18,
+        "eval_pool_ratio": 0.12,
         "auto_threshold": true,
         "threshold": 0.5,
         "good_window_weight": 0.0,
         "use_class_weights": true,
-        "class_weight_power": 0.7050732298254547,
+        "class_weight_power": 0.65,
         "multiclass_eval_mode": "topk_per_class",
         "use_balanced_sampler": true,
-        "balanced_sampler_power": 0.35898362989602745
+        "balanced_sampler_power": 0.35
       },
       "metric": "macro_f1",
       "checkpoint_dir": "checkpoints/audio_best_100",
