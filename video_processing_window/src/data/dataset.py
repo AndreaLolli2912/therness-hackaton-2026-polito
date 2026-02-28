@@ -12,6 +12,7 @@ import json
 import torch
 import numpy as np
 import concurrent.futures
+import subprocess
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
@@ -84,9 +85,25 @@ class WeldingWindowDataset(Dataset):
             def process_one_video(item):
                 path, code = item
                 if not os.path.exists(path): return None, []
-                cap = cv2.VideoCapture(path)
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                cap.release()
+                
+                # Fast frame count via ffprobe (skips slow cv2 header reading over network)
+                total_frames = -1
+                try:
+                    cmd = [
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-count_packets", "-show_entries", "stream=nb_read_packets",
+                        "-of", "csv=p=0", path
+                    ]
+                    output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=5)
+                    total_frames = int(output.decode('utf-8').strip())
+                except Exception:
+                    pass
+                
+                if total_frames <= 0:
+                    # Fallback to OpenCV
+                    cap = cv2.VideoCapture(path)
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.release()
                 
                 rel_p = os.path.relpath(path, data_root) if data_root else path
                 
@@ -203,9 +220,24 @@ class WeldingFileDataset(Dataset):
             print(f"       Scanning {len(to_scan)} for file indices (parallel)...")
             def process_one(item):
                 p, c = item
-                cap = cv2.VideoCapture(p)
-                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                cap.release()
+                
+                total = -1
+                try:
+                    cmd = [
+                        "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-count_packets", "-show_entries", "stream=nb_read_packets",
+                        "-of", "csv=p=0", p
+                    ]
+                    output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=5)
+                    total = int(output.decode('utf-8').strip())
+                except Exception:
+                    pass
+                    
+                if total <= 0:
+                    cap = cv2.VideoCapture(p)
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.release()
+                    
                 rel_p = os.path.relpath(p, data_root) if data_root else p
                 return rel_p, total, c
 
