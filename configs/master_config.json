@@ -11,8 +11,8 @@
     },
     "training": {
       "epochs": 15,
-      "batch_size": 16,
-      "lr": 0.00005,
+      "batch_size": 32,
+      "lr": 0.001,
       "seq_len": 25,
       "frame_skip": 3,
       "metric": "hackathon_combined",
