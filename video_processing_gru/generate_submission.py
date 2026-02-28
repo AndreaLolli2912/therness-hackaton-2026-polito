@@ -1,14 +1,5 @@
 """
-Generate hackathon submission CSV from a trained 7-class video model.
-
-Reads test_data/ samples, runs inference, and outputs:
-  sample_id, pred_label_code, p_defect
-
-Usage:
-    python generate_submission.py \
-        --checkpoint checkpoints/video_classifier.pth \
-        --test_dir /path/to/test_data \
-        --output predictions.csv
+Generate submission CSV from a trained video model.
 """
 import os
 import csv
@@ -22,7 +13,7 @@ from torchvision import transforms
 from src.models.video_model import StreamingVideoClassifier
 
 
-# ── Constants matching training ──────────────────────────────────
+# Label mapping (index → code)
 LABEL_CODE_MAP = {0: "00", 1: "01", 2: "02", 3: "06", 4: "07", 5: "08", 6: "11"}
 
 TRANSFORM = transforms.Compose([

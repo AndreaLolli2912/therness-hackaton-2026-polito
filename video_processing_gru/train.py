@@ -1,43 +1,24 @@
-"""
-Video classifier training with hackathon-optimized scoring.
-
-Key improvements over baseline:
-  - Inverse-frequency class weights for imbalanced defect types
-  - GroupShuffleSplit on configuration folders (prevents data leakage)
-  - Binary + multi-class metrics logged each epoch
-  - Combined hackathon score as the checkpoint metric:
-      FinalScore = 0.6 * Binary_F1 + 0.4 * Type_MacroF1
-"""
 import time
-_t0 = time.time()
 
-print("[1/8] Importing standard libraries...")
 import os
 import json
 import numpy as np
 from collections import Counter
 
-print("[2/8] Importing PyTorch...")
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 from torch.amp import autocast
-print(f"       PyTorch {torch.__version__} loaded.")
 
-print("[3/8] Importing scikit-learn...")
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import f1_score, classification_report, roc_auc_score
-print(f"       scikit-learn loaded.")
 
-print("[4/8] Importing project modules...")
 from src.models.video_model import StreamingVideoClassifier
 from src.data.dataset import (
     WeldingSequenceDataset, get_video_transforms, get_video_files_and_labels,
 )
-print(f"       All imports done in {time.time()-_t0:.1f}s.\n")
-
 
 # ── Label mapping (index → code) ─────────────────────────────────
 LABEL_CODE_MAP = {0: "00", 1: "01", 2: "02", 3: "06", 4: "07", 5: "08", 6: "11"}
@@ -100,30 +81,27 @@ def train_video(config, full_train=False, checkpoint=None):
         device = torch.device(device)
 
     num_classes = config.get('num_classes', 7)
-    print(f"[5/8] Configuration loaded.")
-    print(f"       data_root:   {os.path.abspath(data_root)}")
-    print(f"       device:      {device}")
-    print(f"       num_classes: {num_classes}")
-    print(f"       epochs:      {v_conf['epochs']}")
-    print(f"       batch_size:  {v_conf['batch_size']}")
-    print(f"       lr:          {v_conf['lr']}")
-    print(f"       seq_len:     {v_conf['seq_len']}")
-    print(f"       frame_skip:  {v_conf['frame_skip']}")
-    print(f"       full_train:  {full_train}")
+    print(f"data_root:   {os.path.abspath(data_root)}")
+    print(f"device:      {device}")
+    print(f"num_classes: {num_classes}")
+    print(f"epochs:      {v_conf['epochs']}")
+    print(f"batch_size:  {v_conf['batch_size']}")
+    print(f"lr:          {v_conf['lr']}")
+    print(f"seq_len:     {v_conf['seq_len']}")
+    print(f"frame_skip:  {v_conf['frame_skip']}")
     if full_train:
-        print(f"       ⚠ FULL TRAINING MODE: using 100% of data, no validation")
+        print(f"FULL TRAINING MODE: using 100% of data, no validation")
     if checkpoint:
-        print(f"       ⚠ RESUMING from checkpoint: {checkpoint}")
+        print(f"RESUMING from checkpoint: {checkpoint}")
 
     # ── 1. Discover files, labels, and groups ────────────────────
-    print(f"\n[6/8] Discovering video files in {os.path.abspath(data_root)}...")
+    print(f"\nDiscovering video files in {os.path.abspath(data_root)}...")
     t_discover = time.time()
     video_data = get_video_files_and_labels(data_root)
     if not video_data:
-        print(f"  ERROR: No video data found in {data_root}")
-        print(f"  Make sure the dataset folder contains good_weld/ and defect_data_weld/ subdirectories.")
+        print(f"ERROR: No video data found in {data_root}")
         return
-    print(f"       Found {len(video_data)} videos in {time.time()-t_discover:.1f}s.")
+    print(f"Found {len(video_data)} videos.")
 
     paths, labels, groups = zip(*video_data)
     paths = list(paths)
@@ -180,8 +158,7 @@ def train_video(config, full_train=False, checkpoint=None):
                   f"train and val sets. Consider adjusting split strategy.")
 
     # ── 3. Prepare datasets ──────────────────────────────────────
-    print(f"\n[7/8] Building datasets and dataloaders...")
-    t_dataset = time.time()
+    print(f"\nBuilding datasets and dataloaders...")
     train_dataset = WeldingSequenceDataset(
         train_paths, train_labels,
         transform=get_video_transforms(is_training=True),
@@ -194,10 +171,9 @@ def train_video(config, full_train=False, checkpoint=None):
         seq_len=v_conf['seq_len'],
         frame_skip=v_conf['frame_skip']
     )
-    print(f"       Train dataset: {len(train_dataset)} sequences")
+    print(f"Train dataset: {len(train_dataset)} sequences")
     if not full_train:
-        print(f"       Val dataset:   {len(val_dataset)} sequences")
-    print(f"       Datasets built in {time.time()-t_dataset:.1f}s.")
+        print(f"Val dataset:   {len(val_dataset)} sequences")
 
     train_loader = DataLoader(
         train_dataset, batch_size=v_conf['batch_size'],
@@ -207,12 +183,9 @@ def train_video(config, full_train=False, checkpoint=None):
         val_dataset, batch_size=v_conf['batch_size'],
         shuffle=False, num_workers=8, pin_memory=True, persistent_workers=True
     )
-    print(f"       Train batches: {len(train_loader)}")
-    if not full_train:
-        print(f"       Val batches:   {len(val_loader)}")
 
     # ── 4. Initialize model ──────────────────────────────────────
-    print(f"\n[8/8] Initializing model...")
+    print(f"\nInitializing model...")
     model = StreamingVideoClassifier(
         num_classes=num_classes,
         hidden_size=m_conf['hidden_size'],
@@ -220,25 +193,22 @@ def train_video(config, full_train=False, checkpoint=None):
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"       StreamingVideoClassifier loaded on {device}")
-    print(f"       Parameters: {n_params:,}")
-    print(f"       Pretrained backbone: {m_conf['pretrained']}")
+    print(f"Model loaded on {device}")
+    print(f"Parameters: {n_params:,}")
 
     checkpoint_path_to_load = config.get('video', {}).get('training', {}).get('resume_from') or checkpoint
 
     if checkpoint_path_to_load:
-        abs_ckpt = os.path.abspath(checkpoint_path_to_load)
         if not os.path.exists(checkpoint_path_to_load):
-            print(f"  ⚠ WARNING: Checkpoint file NOT FOUND: {abs_ckpt}")
-            print(f"       Training will start from scratch (pretrained backbone only).")
+            print(f"WARNING: Checkpoint file NOT FOUND: {checkpoint_path_to_load}")
         else:
-            print(f"       Loading checkpoint from {abs_ckpt}...")
+            print(f"Loading checkpoint from {checkpoint_path_to_load}...")
             try:
                 state_dict = torch.load(checkpoint_path_to_load, map_location=device)
                 model.load_state_dict(state_dict)
-                print(f"       ✓ Checkpoint loaded successfully.")
+                print(f"✓ Checkpoint loaded.")
             except Exception as e:
-                print(f"  ✗ ERROR loading checkpoint: {e}")
+                print(f"✗ ERROR loading checkpoint: {e}")
                 raise
 
 
@@ -246,10 +216,9 @@ def train_video(config, full_train=False, checkpoint=None):
     use_weights = v_conf.get('class_weights', 'inverse_frequency')
     if use_weights == 'inverse_frequency':
         weights = compute_class_weights(train_label_indices, num_classes).to(device)
-        print(f"       Class weights (inverse-freq): {[f'{w:.3f}' for w in weights.tolist()]}")
+        print(f"Class weights: {[f'{w:.3f}' for w in weights.tolist()]}")
         criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.05)
     else:
-        print(f"       Class weights: none (uniform)")
         criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
 
     optimizer = optim.Adam(model.parameters(), lr=v_conf['lr'])
@@ -258,7 +227,6 @@ def train_video(config, full_train=False, checkpoint=None):
     # Mixed precision scaler
     use_amp = device.type == 'cuda'
     scaler = GradScaler(enabled=use_amp)
-    print(f"       Mixed precision (AMP): {'enabled' if use_amp else 'disabled'}")
 
     best_score = 0.0
     epochs = v_conf['epochs']
@@ -269,13 +237,10 @@ def train_video(config, full_train=False, checkpoint=None):
         base, ext = os.path.splitext(checkpoint_path)
         checkpoint_path = f"{base}_full{ext}"
 
-    total_setup_time = time.time() - _t0
     print(f"\n{'='*65}")
-    print(f"  TRAINING START — {epochs} epochs, setup took {total_setup_time:.1f}s")
+    print(f"  TRAINING START — {epochs} epochs")
     if full_train:
-        print(f"  Mode: FULL TRAINING (100% data, no validation)")
-    else:
-        print(f"  Checkpoint metric: 0.6 * Binary_F1 + 0.4 * Macro_F1")
+        print(f"  Mode: FULL TRAINING")
     print(f"  Model saved to: {checkpoint_path}")
     print(f"{'='*65}\n")
 
@@ -328,7 +293,7 @@ def train_video(config, full_train=False, checkpoint=None):
         print(f"     Avg Loss:       {train_loss/len(train_loader):.4f}")
         print(f"     Macro F1:       {train_macro_f1:.4f}")
         print(f"     Binary F1:      {train_binary_f1:.4f}")
-        print(f"     Hackathon Score: {train_hackathon:.4f}")
+        print(f"     Combined Score: {train_hackathon:.4f}")
 
         # ── Validation or save (full mode) ────────────────────────
         if full_train:
@@ -378,7 +343,7 @@ def train_video(config, full_train=False, checkpoint=None):
             print(f"     Macro F1:       {val_macro_f1:.4f}")
             print(f"     Binary F1:      {val_binary_f1:.4f}")
             print(f"     ROC-AUC:        {val_roc_auc if val_roc_auc else 'N/A'}")
-            print(f"     Hackathon Score: {val_hackathon:.4f}")
+            print(f"     Combined Score: {val_hackathon:.4f}")
             print()
             print(classification_report(val_labels_list, val_preds, digits=4, zero_division=0))
 
@@ -387,7 +352,7 @@ def train_video(config, full_train=False, checkpoint=None):
                 best_score = val_hackathon
                 os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
                 torch.save(model.state_dict(), checkpoint_path)
-                print(f"  ✓ NEW BEST MODEL SAVED! (Hackathon Score: {best_score:.4f})")
+                print(f"  ✓ NEW BEST MODEL SAVED! (Combined Score: {best_score:.4f})")
                 print(f"    → {os.path.abspath(checkpoint_path)}")
             else:
                 print(f"  ✗ No improvement (best={best_score:.4f}, current={val_hackathon:.4f})")
@@ -399,13 +364,11 @@ def train_video(config, full_train=False, checkpoint=None):
         # Step the scheduler
         scheduler.step()
 
-    total_time = time.time() - _t0
     print(f"{'='*65}")
     print(f"  TRAINING COMPLETE")
     if not full_train:
-        print(f"  Best Val Hackathon Score: {best_score:.4f}")
+        print(f"  Best Combined Score: {best_score:.4f}")
     print(f"  Model saved to: {os.path.abspath(checkpoint_path)}")
-    print(f"  Total time: {total_time:.1f}s")
     print(f"{'='*65}")
 
 

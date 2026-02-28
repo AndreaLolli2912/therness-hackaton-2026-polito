@@ -4,10 +4,6 @@ from torchvision import models
 
 class StreamingVideoClassifier(nn.Module):
     def __init__(self, num_classes=7, hidden_size=128, pretrained=True):
-        """
-        Hybrid CNN-RNN architecture for real-time welding defect detection.
-        Balances MobileNetV3 efficiency with GRU temporal awareness.
-        """
         super(StreamingVideoClassifier, self).__init__()
         
         # 1. Spatial Feature Extractor (MobileNetV3 Small)

@@ -153,7 +153,7 @@ def main():
     print("── Calibration ─────────────────────────────────────")
     print(f"  ECE (binary):   {ece:.4f}")
 
-    print("\n── Combined Hackathon Score ─────────────────────────")
+    print("\n── Combined Score ─────────────────────────")
     print(f"  0.6 × Binary F1 ({binary_f1:.4f}) + "
           f"0.4 × Macro F1 ({macro_f1:.4f}) - "
           f"0.05 × ECE ({ece:.4f})")
