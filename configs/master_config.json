@@ -1,7 +1,7 @@
 {
   "project_name": "therness-welding-hackathon",
-  "train_data_root": "/Users/timon/Desktop/Hackathon",
-  "test_data_root": "/Users/timon/Desktop/Hackathon/test_data",
+  "train_data_root": "/root/data/train_data",
+  "test_data_root": "/root/data/test_data",
   "num_classes": 7,
   "device": "auto",
   "video": {
@@ -10,7 +10,7 @@
       "pretrained": true
     },
     "training": {
-      "epochs": 10,
+      "epochs": 15,
       "batch_size": 32,
       "lr": 0.0003,
       "seq_len": 25,
@@ -18,7 +18,7 @@
       "metric": "hackathon_combined",
       "class_weights": "inverse_frequency",
       "split_strategy": "group_shuffle",
-      "checkpoint_path": "/Users/timon/Desktop/Hackathon/gru_classifier_sprint.pth"
+      "checkpoint_path": "checkpoints/video/gru_classifier_sprint.pth"
     }
   },
   "video_window": {
