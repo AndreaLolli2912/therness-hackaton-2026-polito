@@ -147,8 +147,12 @@ def main():
     model_cfg = cfg["audio"]["model"]
     train_cfg = cfg["audio"]["training"]
     num_classes = cfg["num_classes"]
-    data_root = cfg["data_root"]
-    test_root = cfg.get("test_root", "")
+    data_root = cfg.get("data_root", cfg.get("train_data_root"))
+    test_root = cfg.get("test_root", cfg.get("test_data_root", ""))
+    if not data_root:
+        raise KeyError(
+            "Missing dataset root in config. Provide either 'data_root' or 'train_data_root'."
+        )
 
     optim_cfg = {"lr": train_cfg["lr"], "weight_decay": train_cfg.get("weight_decay", 1e-4)}
     lr_sched_cfg = train_cfg.get("lr_schedule", {})
@@ -167,8 +171,9 @@ def main():
         assert args.checkpoint, "--checkpoint required for --submission"
 
         test_dataset = AudioDataset(test_root, cfg=audio_cfg, labeled=False)
+        submission_batch_size = int(train_cfg.get("batch_size", mil_cfg.get("batch_size", 8)))
         test_loader = DataLoader(
-            test_dataset, batch_size=train_cfg["batch_size"], shuffle=False,
+            test_dataset, batch_size=submission_batch_size, shuffle=False,
             num_workers=train_cfg["num_workers"], collate_fn=submission_collate_fn,
         )
 
