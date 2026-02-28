@@ -66,6 +66,19 @@ def _load_sidecar_config(checkpoint_path: Path) -> Optional[Dict]:
     return _load_json(cfg_path)
 
 
+def _resolve_device(device_arg: str) -> torch.device:
+    dev = str(device_arg).strip().lower()
+    if dev == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if dev == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device=cuda requested, but CUDA is not available")
+        return torch.device("cuda")
+    if dev == "cpu":
+        return torch.device("cpu")
+    raise ValueError(f"Unsupported device: {device_arg}. Use one of: auto, cuda, cpu")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Binary deploy model (good_weld vs defect)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -101,8 +114,7 @@ class DeploySingleLabelMIL(nn.Module):
         values, _ = torch.topk(prob_seq, k=k)
         return values.mean()
 
-    def forward(self, waveform: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Full waveform (C, N) → top-k pooled binary prediction."""
+    def _chunk_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         if waveform.dim() != 2:
             raise RuntimeError("waveform must have shape (C, N)")
 
@@ -116,6 +128,11 @@ class DeploySingleLabelMIL(nn.Module):
 
         used = waveform[:, : n_chunks * self.chunk_samples]
         windows = used.reshape(1, n_chunks, self.chunk_samples).permute(1, 0, 2)  # (T, 1, S)
+        return windows
+
+    def forward(self, waveform: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Full waveform (C, N) → top-k pooled binary prediction."""
+        windows = self._chunk_waveform(waveform)
 
         logits = self.base_model(windows)
         if logits.dim() == 2 and logits.size(1) == 1:
@@ -127,6 +144,60 @@ class DeploySingleLabelMIL(nn.Module):
         label = (p_defect >= self.threshold).to(torch.int64)
 
         return {"label": label, "p_defect": p_defect}
+
+    @torch.jit.export
+    def extract_window_activation(self, window: torch.Tensor) -> torch.Tensor:
+        """Return penultimate embedding for a single window: (128,) tensor."""
+        if window.dim() == 2:
+            window = window.unsqueeze(0)  # (1, 1, S)
+        feats = self.base_model.forward_features(window)  # (1, 128)
+        return feats.squeeze(0)
+
+    @torch.jit.export
+    def extract_window_activations(self, window: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Return full stage/head activations for a single window."""
+        if window.dim() == 2:
+            window = window.unsqueeze(0)  # (1, 1, S)
+        acts = self.base_model.forward_activations(window)
+        return {
+            "stem": acts["stem"].squeeze(0),
+            "stage1": acts["stage1"].squeeze(0),
+            "stage2": acts["stage2"].squeeze(0),
+            "stage3": acts["stage3"].squeeze(0),
+            "head_pool": acts["head_pool"].squeeze(0),
+            "head_flat": acts["head_flat"].squeeze(0),
+            "head_dropout": acts["head_dropout"].squeeze(0),
+            "logits": acts["logits"].squeeze(0),
+        }
+
+    @torch.jit.export
+    def extract_file_activations(self, waveform: torch.Tensor) -> torch.Tensor:
+        """Return per-window embeddings for full file: (T, 128)."""
+        windows = self._chunk_waveform(waveform)
+        feats = self.base_model.forward_features(windows)  # (T, 128)
+        return feats
+
+    @torch.jit.export
+    def extract_file_activation_mean(self, waveform: torch.Tensor) -> torch.Tensor:
+        """Return mean-pooled file embedding: (128,)."""
+        feats = self.extract_file_activations(waveform)
+        return feats.mean(dim=0)
+
+    @torch.jit.export
+    def extract_file_activation_summary(self, waveform: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Return mean-pooled stage/head activations for a full file."""
+        windows = self._chunk_waveform(waveform)
+        acts = self.base_model.forward_activations(windows)
+        return {
+            "stem": acts["stem"].mean(dim=0),
+            "stage1": acts["stage1"].mean(dim=0),
+            "stage2": acts["stage2"].mean(dim=0),
+            "stage3": acts["stage3"].mean(dim=0),
+            "head_pool": acts["head_pool"].mean(dim=0),
+            "head_flat": acts["head_flat"].mean(dim=0),
+            "head_dropout": acts["head_dropout"].mean(dim=0),
+            "logits": acts["logits"].mean(dim=0),
+        }
 
     @torch.jit.export
     def predict_window(self, window: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -174,8 +245,7 @@ class DeployMulticlassFile(nn.Module):
         self.chunk_samples = int(chunk_samples)
         self.num_classes = int(num_classes)
 
-    def forward(self, waveform: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Full waveform (C, N) → mean-pooled multiclass prediction."""
+    def _chunk_waveform(self, waveform: torch.Tensor) -> torch.Tensor:
         if waveform.dim() != 2:
             raise RuntimeError("waveform must have shape (C, N)")
 
@@ -189,6 +259,11 @@ class DeployMulticlassFile(nn.Module):
 
         used = waveform[:, : n_chunks * self.chunk_samples]
         windows = used.reshape(1, n_chunks, self.chunk_samples).permute(1, 0, 2)  # (T, 1, S)
+        return windows
+
+    def forward(self, waveform: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Full waveform (C, N) → mean-pooled multiclass prediction."""
+        windows = self._chunk_waveform(waveform)
 
         logits = self.base_model(windows)          # (T, num_classes)
         probs = torch.softmax(logits, dim=1)       # (T, num_classes)
@@ -196,6 +271,60 @@ class DeployMulticlassFile(nn.Module):
         label = mean_probs.argmax().to(torch.int64)
 
         return {"label": label, "probs": mean_probs}
+
+    @torch.jit.export
+    def extract_window_activation(self, window: torch.Tensor) -> torch.Tensor:
+        """Return penultimate embedding for a single window: (128,) tensor."""
+        if window.dim() == 2:
+            window = window.unsqueeze(0)  # (1, 1, S)
+        feats = self.base_model.forward_features(window)  # (1, 128)
+        return feats.squeeze(0)
+
+    @torch.jit.export
+    def extract_window_activations(self, window: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Return full stage/head activations for a single window."""
+        if window.dim() == 2:
+            window = window.unsqueeze(0)  # (1, 1, S)
+        acts = self.base_model.forward_activations(window)
+        return {
+            "stem": acts["stem"].squeeze(0),
+            "stage1": acts["stage1"].squeeze(0),
+            "stage2": acts["stage2"].squeeze(0),
+            "stage3": acts["stage3"].squeeze(0),
+            "head_pool": acts["head_pool"].squeeze(0),
+            "head_flat": acts["head_flat"].squeeze(0),
+            "head_dropout": acts["head_dropout"].squeeze(0),
+            "logits": acts["logits"].squeeze(0),
+        }
+
+    @torch.jit.export
+    def extract_file_activations(self, waveform: torch.Tensor) -> torch.Tensor:
+        """Return per-window embeddings for full file: (T, 128)."""
+        windows = self._chunk_waveform(waveform)
+        feats = self.base_model.forward_features(windows)  # (T, 128)
+        return feats
+
+    @torch.jit.export
+    def extract_file_activation_mean(self, waveform: torch.Tensor) -> torch.Tensor:
+        """Return mean-pooled file embedding: (128,)."""
+        feats = self.extract_file_activations(waveform)
+        return feats.mean(dim=0)
+
+    @torch.jit.export
+    def extract_file_activation_summary(self, waveform: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Return mean-pooled stage/head activations for a full file."""
+        windows = self._chunk_waveform(waveform)
+        acts = self.base_model.forward_activations(windows)
+        return {
+            "stem": acts["stem"].mean(dim=0),
+            "stage1": acts["stage1"].mean(dim=0),
+            "stage2": acts["stage2"].mean(dim=0),
+            "stage3": acts["stage3"].mean(dim=0),
+            "head_pool": acts["head_pool"].mean(dim=0),
+            "head_flat": acts["head_flat"].mean(dim=0),
+            "head_dropout": acts["head_dropout"].mean(dim=0),
+            "logits": acts["logits"].mean(dim=0),
+        }
 
     @torch.jit.export
     def predict_window(self, window: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -225,6 +354,8 @@ def main() -> None:
     parser.add_argument("--eval_pool_ratio", type=float, default=None)
     parser.add_argument("--threshold",       type=float, default=None)
     parser.add_argument("--defect_idx",      type=int,   default=None)
+    parser.add_argument("--device",          type=str,   default="auto",
+                        help="Export device: auto|cuda|cpu (default: auto)")
     args = parser.parse_args()
 
     ckpt_path = Path(args.checkpoint)
@@ -261,7 +392,7 @@ def main() -> None:
     if args.threshold       is not None: threshold       = float(args.threshold)
 
     # ── Load checkpoint ────────────────────────────────────────────
-    device = torch.device("cpu")
+    device = _resolve_device(args.device)
     try:
         checkpoint = torch.load(str(ckpt_path), map_location=device, weights_only=True)
     except TypeError:
@@ -280,7 +411,7 @@ def main() -> None:
     backbone   = AudioCNN(num_classes=num_classes, dropout=dropout)
     base_model = WeldModel(backbone, cfg=audio_cfg)
     base_model.load_state_dict(model_state)
-    base_model.eval()
+    base_model.to(device).eval()
 
     chunk_samples = int(float(audio_cfg["chunk_length_in_s"]) * int(audio_cfg["sampling_rate"]))
 
@@ -294,7 +425,7 @@ def main() -> None:
             defect_idx=defect_idx,
             eval_pool_ratio=eval_pool_ratio,
             threshold=threshold,
-        ).eval()
+        ).to(device).eval()
         print(f"Export mode : binary (DeploySingleLabelMIL)")
         print(f"  defect_idx     = {defect_idx}")
         print(f"  eval_pool_ratio= {eval_pool_ratio}")
@@ -304,10 +435,11 @@ def main() -> None:
             base_model=base_model,
             chunk_samples=chunk_samples,
             num_classes=num_classes,
-        ).eval()
+        ).to(device).eval()
         print(f"Export mode : multiclass (DeployMulticlassFile)")
         print(f"  num_classes    = {num_classes}")
 
+    print(f"  export_device  = {device}")
     print(f"  chunk_samples  = {chunk_samples}  ({audio_cfg['chunk_length_in_s']}s @ {audio_cfg['sampling_rate']} Hz)")
 
     # ── TorchScript export ─────────────────────────────────────────
@@ -321,6 +453,11 @@ def main() -> None:
     print("Methods available on loaded model:")
     print("  model(waveform)              → file-level prediction")
     print("  model.predict_window(window) → single-window prediction")
+    print("  model.extract_window_activation(window)    → (128,) embedding")
+    print("  model.extract_file_activations(waveform)   → (T, 128) embeddings")
+    print("  model.extract_file_activation_mean(waveform) → (128,) embedding")
+    print("  model.extract_window_activations(window)   → all stage/head activations")
+    print("  model.extract_file_activation_summary(waveform) → mean stage/head activations")
 
 
 if __name__ == "__main__":

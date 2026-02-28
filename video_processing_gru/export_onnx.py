@@ -32,6 +32,19 @@ import torch.nn as nn
 from src.models.video_model import StreamingVideoClassifier
 
 
+def _resolve_device(device_arg: str) -> torch.device:
+    dev = str(device_arg).strip().lower()
+    if dev == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if dev == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device=cuda requested, but CUDA is not available")
+        return torch.device("cuda")
+    if dev == "cpu":
+        return torch.device("cpu")
+    raise ValueError(f"Unsupported device: {device_arg}. Use one of: auto, cuda, cpu")
+
+
 # Inline AudioCNN to avoid circular imports
 class AudioCNN(nn.Module):
     """3-block CNN for audio classification."""
@@ -81,22 +94,23 @@ class VideoModelSingleFrame(nn.Module):
         return logits
 
 
-def export_video_onnx(checkpoint, output, num_classes=7, hidden_size=128):
+def export_video_onnx(checkpoint, output, num_classes=7, hidden_size=128, device="auto"):
     """Export video model to ONNX for single-frame inference."""
+    export_device = _resolve_device(device)
     model = StreamingVideoClassifier(
         num_classes=num_classes,
         hidden_size=hidden_size,
         pretrained=False,
     )
-    state = torch.load(checkpoint, map_location='cpu', weights_only=True)
+    state = torch.load(checkpoint, map_location=export_device, weights_only=True)
     model.load_state_dict(state)
-    model.eval()
+    model.to(export_device).eval()
 
     wrapper = VideoModelSingleFrame(model)
-    wrapper.eval()
+    wrapper.to(export_device).eval()
 
     # Dummy input: single frame
-    dummy = torch.randn(1, 3, 224, 224)
+    dummy = torch.randn(1, 3, 224, 224, device=export_device)
 
     os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
     torch.onnx.export(
@@ -111,19 +125,21 @@ def export_video_onnx(checkpoint, output, num_classes=7, hidden_size=128):
         do_constant_folding=True,
     )
     print(f"Exported video model to {output}")
+    print(f"  Export device: {export_device}")
     print(f"  File size: {os.path.getsize(output) / 1024 / 1024:.2f} MB")
     return output
 
 
-def export_audio_onnx(checkpoint, output, num_classes=7, dropout=0.3):
+def export_audio_onnx(checkpoint, output, num_classes=7, dropout=0.3, device="auto"):
     """Export audio model to ONNX."""
+    export_device = _resolve_device(device)
     model = AudioCNN(num_classes=num_classes, dropout=dropout)
-    state = torch.load(checkpoint, map_location='cpu', weights_only=True)
+    state = torch.load(checkpoint, map_location=export_device, weights_only=True)
     model.load_state_dict(state)
-    model.eval()
+    model.to(export_device).eval()
 
     # Dummy input: (B, 1, n_mels=40, T=24) for a 0.5s chunk
-    dummy = torch.randn(1, 1, 40, 24)
+    dummy = torch.randn(1, 1, 40, 24, device=export_device)
 
     os.makedirs(os.path.dirname(output) or '.', exist_ok=True)
     torch.onnx.export(
@@ -138,6 +154,7 @@ def export_audio_onnx(checkpoint, output, num_classes=7, dropout=0.3):
         do_constant_folding=True,
     )
     print(f"Exported audio model to {output}")
+    print(f"  Export device: {export_device}")
     print(f"  File size: {os.path.getsize(output) / 1024 / 1024:.2f} MB")
     return output
 
@@ -200,17 +217,19 @@ def main():
     parser.add_argument("--num_classes", type=int, default=7)
     parser.add_argument("--hidden_size", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.3)
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto",
+                        help="Export device for loading and tracing: auto|cuda|cpu")
     args = parser.parse_args()
 
     if args.model == "video":
         onnx_path = export_video_onnx(
             args.checkpoint, args.output,
-            args.num_classes, args.hidden_size
+            args.num_classes, args.hidden_size, args.device
         )
     else:
         onnx_path = export_audio_onnx(
             args.checkpoint, args.output,
-            args.num_classes, args.dropout
+            args.num_classes, args.dropout, args.device
         )
 
     if args.quantize:

@@ -24,8 +24,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 
-from audio_model import AudioCNN
-from audio.audio_processing import AudioDataset, AudioFileDataset, WeldModel
+from audio_model import AudioCNN, AudioCNNBackbone
+from audio.audio_processing import AudioDataset, AudioFileDataset, WeldModel, WeldBackboneModel
 from audio.run_train import run_training
 from audio.run_train_mil import run_training_mil
 from audio.test import run_test, run_test_mil, generate_submission
@@ -183,8 +183,8 @@ def main():
             print("WARNING: no config.json found in checkpoint dir, using default label_map")
             label_map = {0: "00", 1: "01", 2: "02", 3: "06", 4: "07", 5: "08", 6: "11"}
 
-        backbone = AudioCNN(num_classes=len(label_map), dropout=model_cfg["dropout"])
-        model = WeldModel(backbone, cfg=audio_cfg)
+        backbone = AudioCNNBackbone(num_classes=len(label_map), dropout=model_cfg["dropout"])
+        model = WeldBackboneModel(backbone, cfg=audio_cfg)
         generate_submission(
             model, test_loader, device, args.checkpoint,
             label_map=label_map, output_path="submission.csv",
@@ -394,9 +394,9 @@ def main():
                 f"power={class_weight_power} | weights={printable}"
             )
 
-    # ── Model (WeldModel = AudioTransform + AudioCNN) ───────────
-    backbone = AudioCNN(num_classes=num_classes, dropout=model_cfg["dropout"])
-    model = WeldModel(backbone, cfg=audio_cfg)
+    # ── Model (WeldBackboneModel = AudioTransform + AudioCNNBackbone) ──
+    backbone = AudioCNNBackbone(num_classes=num_classes, dropout=model_cfg["dropout"])
+    model = WeldBackboneModel(backbone, cfg=audio_cfg)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # ── Optimizer ─────────────────────────────────────────────────
