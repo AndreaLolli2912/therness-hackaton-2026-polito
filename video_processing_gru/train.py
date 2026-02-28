@@ -88,7 +88,7 @@ def train_video(config, full_train=False):
     # Extract configs
     v_conf = config['video']['training']
     m_conf = config['video']['model']
-    data_root = config['data_root']
+    data_root = config['train_data_root']
     device = config.get('device', 'auto')
     if device == "auto":
         device = torch.device(
@@ -199,11 +199,11 @@ def train_video(config, full_train=False):
 
     train_loader = DataLoader(
         train_dataset, batch_size=v_conf['batch_size'],
-        shuffle=True, num_workers=4, pin_memory=True
+        shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True
     )
     val_loader = DataLoader(
         val_dataset, batch_size=v_conf['batch_size'],
-        shuffle=False, num_workers=4, pin_memory=True
+        shuffle=False, num_workers=8, pin_memory=True, persistent_workers=True
     )
     print(f"       Train batches: {len(train_loader)}")
     if not full_train:
