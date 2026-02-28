@@ -1,75 +1,109 @@
 """Simple CNN classifier for mel spectrogram audio classification.
 
-Input shape:  (batch, 1, 40, 1897)  — 1 channel, 40 mel bins, 1897 time frames
+Input shape:  (batch, 1, 40, 9)  — 1 channel, 40 mel bins, 9 time frames (0.2s chunk)
 Output shape: (batch, num_classes)
 
 Architecture overview:
-    3 x [Conv2d → BatchNorm → ReLU → MaxPool2d → Dropout]
+    2 x [Conv2d → BatchNorm → ReLU → MaxPool2d → Dropout]
+    1 x [Conv2d → BatchNorm → ReLU → Dropout]          (no pool — spatial too small)
     → AdaptiveAvgPool2d(1,1)
     → Flatten
     → Linear → num_classes
-
-To add more capacity: copy a conv block, double the channels.
 """
 
 import torch.nn as nn
 
 
-class AudioCNN(nn.Module):
+# ─────────────────────────────────────────────
+# Residual Block
+# ─────────────────────────────────────────────
 
-    def __init__(self, num_classes: int = 7, dropout: float = 0.3):
+class ResBlock(nn.Module):
+    def __init__(self, channels):
         super().__init__()
 
-        # ── Conv block 1 ──────────────────────────────────────────────
-        # Input:  (batch, 1, 40, 1897)
-        # Conv:   (batch, 16, 40, 1897)  — same padding keeps spatial dims
-        # Pool:   (batch, 16, 20, 948)   — halves both dims
-        self.block1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(dropout),
-        )
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels)
 
-        # ── Conv block 2 ──────────────────────────────────────────────
-        # Input:  (batch, 16, 20, 948)
-        # Conv:   (batch, 32, 20, 948)
-        # Pool:   (batch, 32, 10, 474)
-        self.block2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+
+# ─────────────────────────────────────────────
+# ResNet-Style Audio CNN (~186k params)
+# Designed for (B, 1, 40, ~49)
+# ─────────────────────────────────────────────
+
+class AudioCNN(nn.Module):
+
+    def __init__(self, num_classes: int = 7, dropout: float = 0.15):
+        super().__init__()
+
+        # ── Stem ─────────────────────────────
+        # (B,1,40,49) → (B,32,40,49)
+        self.stem = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(dropout),
+            nn.ReLU(inplace=True),
         )
 
-        # ── Conv block 3 ──────────────────────────────────────────────
-        # Input:  (batch, 32, 10, 474)
-        # Conv:   (batch, 64, 10, 474)
-        # Pool:   (batch, 64, 5, 237)
-        self.block3 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+        # ── Stage 1 ──────────────────────────
+        # (B,32,40,49) → (B,32,20,24)
+        self.stage1 = nn.Sequential(
+            ResBlock(32),
+            nn.MaxPool2d(2),
+        )
+
+        # ── Stage 2 ──────────────────────────
+        # (B,32,20,24) → (B,64,10,12)
+        self.stage2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(64),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
+            ResBlock(64),
             nn.MaxPool2d(2),
-            nn.Dropout2d(dropout),
         )
 
-        # ── Pooling + classifier ──────────────────────────────────────
-        # AdaptiveAvgPool collapses (64, 5, 237) → (64, 1, 1)
-        # This makes the model accept any input time length.
+        # ── Stage 3 ──────────────────────────
+        # (B,64,10,12) → (B,128,5,6)
+        self.stage3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+
+        # ── Head ─────────────────────────────
         self.head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),        # (batch, 64, 1, 1)
-            nn.Flatten(),                    # (batch, 64)
+            nn.AdaptiveAvgPool2d(1),   # (B,128,1,1)
+            nn.Flatten(),              # (B,128)
             nn.Dropout(dropout),
-            nn.Linear(64, num_classes),      # (batch, num_classes)
+            nn.Linear(128, num_classes),
         )
 
     def forward(self, x):
-        # x: (batch, 1, 40, 1897)
-        x = self.block1(x)  # → (batch, 16, 20, 948)
-        x = self.block2(x)  # → (batch, 32, 10, 474)
-        x = self.block3(x)  # → (batch, 64, 5, 237)
-        x = self.head(x)    # → (batch, num_classes)
+
+        x = self.stem(x)     # (B,32,40,49)
+        x = self.stage1(x)   # (B,32,20,24)
+        x = self.stage2(x)   # (B,64,10,12)
+        x = self.stage3(x)   # (B,128,5,6)
+        x = self.head(x)     # (B,num_classes)
+
         return x

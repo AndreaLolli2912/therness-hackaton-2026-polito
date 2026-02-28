@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 
 from audio.train import validate_epoch
+from audio.run_train_mil import validate_epoch_mil
 
 
 def run_test(model, dataloader, criterion, device, checkpoint_path):
@@ -26,6 +27,39 @@ def run_test(model, dataloader, criterion, device, checkpoint_path):
     model.to(device)
 
     return validate_epoch(model, dataloader, criterion, device)
+
+
+def run_test_mil(
+    model,
+    dataloader,
+    device,
+    checkpoint_path,
+    defect_idx,
+    good_idx,
+    topk_ratio_pos=0.05,
+    topk_ratio_neg=0.2,
+    eval_pool_ratio=0.05,
+    threshold=0.5,
+    auto_threshold=False,
+):
+    """Evaluate MIL model on a file-level dataloader using saved checkpoint."""
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(device)
+
+    eval_threshold = float(checkpoint.get("threshold", threshold))
+    return validate_epoch_mil(
+        model=model,
+        dataloader=dataloader,
+        device=device,
+        defect_idx=defect_idx,
+        good_idx=good_idx,
+        topk_ratio_pos=topk_ratio_pos,
+        topk_ratio_neg=topk_ratio_neg,
+        eval_pool_ratio=eval_pool_ratio,
+        threshold=eval_threshold,
+        auto_threshold=auto_threshold,
+    )
 
 
 def generate_submission(
@@ -119,3 +153,98 @@ def generate_submission(
 
     print(f"Submission saved to {output_path} ({len(rows)} rows)")
     return rows
+
+
+def predict_chunk_probs(
+    model,
+    dataloader,
+    device,
+    checkpoint_path,
+    defect_idx=0,
+):
+    """Return per-chunk defect probabilities.
+
+    Args:
+        model: nn.Module.
+        dataloader: yields (inputs, sample_ids) or (inputs, _).
+        device: torch device.
+        checkpoint_path: model checkpoint.
+        defect_idx: class index corresponding to "defect" in softmax output.
+
+    Returns:
+        list of dict rows: {"sample_id", "p_defect"}.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(device)
+    model.eval()
+
+    rows = []
+    running_idx = 0
+
+    with torch.no_grad():
+        for inputs, sample_ids in tqdm(dataloader, desc="Chunk inference", leave=False):
+            if not isinstance(sample_ids, (list, tuple)):
+                sample_ids = [f"chunk_{running_idx + i}" for i in range(len(inputs))]
+
+            if isinstance(inputs, dict):
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                outputs = model(**inputs)
+            else:
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+
+            if outputs.dim() == 2 and outputs.size(1) == 1:
+                probs_defect = torch.sigmoid(outputs).squeeze(1).cpu()
+            else:
+                probs = torch.softmax(outputs, dim=1).cpu()
+                probs_defect = probs[:, defect_idx]
+
+            for i, sid in enumerate(sample_ids):
+                rows.append({
+                    "sample_id": sid,
+                    "p_defect": float(probs_defect[i].item()),
+                })
+            running_idx += len(sample_ids)
+
+    return rows
+
+
+def apply_live_trigger(
+    probs,
+    on_threshold=0.6,
+    off_threshold=0.4,
+    min_consecutive_on=3,
+    min_consecutive_off=5,
+):
+    """Stateful live alarm logic over chunk probabilities.
+
+    The alarm turns ON after `min_consecutive_on` high-probability chunks and turns
+    OFF after `min_consecutive_off` low-probability chunks.
+    """
+    states = []
+    alarm_on = False
+    on_count = 0
+    off_count = 0
+
+    for p in probs:
+        if not alarm_on:
+            if p >= on_threshold:
+                on_count += 1
+            else:
+                on_count = 0
+            if on_count >= min_consecutive_on:
+                alarm_on = True
+                off_count = 0
+        else:
+            if p <= off_threshold:
+                off_count += 1
+            else:
+                off_count = 0
+            if off_count >= min_consecutive_off:
+                alarm_on = False
+                on_count = 0
+
+        states.append(int(alarm_on))
+
+    return states

@@ -3,7 +3,6 @@
   "data_root": "/data1/malto/therness/data/Hackathon",
   "num_classes": 7,
   "device": "auto",
-
   "video": {
     "model": {
       "hidden_size": 128,
@@ -12,14 +11,13 @@
     "training": {
       "epochs": 3,
       "batch_size": 8,
-      "lr": 1e-4,
+      "lr": 0.0001,
       "seq_len": 15,
       "frame_skip": 5,
       "metric": "macro_f1",
       "checkpoint_path": "checkpoints/video_classifier.pth"
     }
   },
-
   "audio": {
     "feature_params": {
       "sampling_rate": 16000,
@@ -37,19 +35,19 @@
       "dropout": 0.15
     },
     "training": {
-      "train_fraction": 0.75,
-      "num_epochs": 45,
-      "batch_size": 64,
-      "lr": 3e-4,
-      "weight_decay": 1e-4,
+      "train_fraction": 0.5,
+      "num_epochs": 30,
+      "batch_size": 128,
+      "lr": 0.0001,
+      "weight_decay": 0.0001,
       "lr_schedule": {
         "warmup_ratio": 0.1,
         "plateau_factor": 0.5,
-        "plateau_patience": 3,
-        "plateau_threshold": 1e-3,
-        "plateau_min_lr": 1e-6
+        "plateau_patience": 2,
+        "plateau_threshold": 0.001,
+        "plateau_min_lr": 1e-06
       },
-      "patience": 10,
+      "patience": 7,
       "val_split": 0.2,
       "seed": 42,
       "num_workers": 4,
@@ -65,7 +63,7 @@
         "good_window_weight": 0.25
       },
       "metric": "macro_f1",
-      "checkpoint_dir": "checkpoints/audio"
+      "checkpoint_dir": "checkpoints/audio_confirm_run_07_topk0.05_gw0.25_lr0.0001"
     }
   }
 }

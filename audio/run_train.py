@@ -2,6 +2,7 @@
 
 import os
 import random
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -28,71 +29,97 @@ def run_training(
     num_epochs,
     checkpoint_dir="checkpoints",
     scheduler=None,
+    plateau_scheduler=None,
+    warmup_steps=0,
+    base_lrs=None,
     patience=None,
     seed=42,
 ):
-    """Run the full training loop.
-
-    Args:
-        model: nn.Module to train.
-        train_loader: training dataloader yielding (inputs, targets).
-        val_loader: validation dataloader yielding (inputs, targets).
-        criterion: loss function.
-        optimizer: optimizer.
-        device: torch device.
-        num_epochs: number of epochs to train.
-        checkpoint_dir: directory to save checkpoints.
-        scheduler: optional LR scheduler (stepped per batch inside train_epoch).
-        patience: early stopping patience (None to disable).
-        seed: random seed for reproducibility.
-
-    Returns:
-        dict with "train_losses", "val_losses", "best_epoch".
-    """
     set_seed(seed)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     model.to(device)
 
+    # AMP scaler (created once)
+    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+
     best_val_f1 = -1.0
     best_epoch = -1
     epochs_without_improvement = 0
+
     train_losses = []
     val_losses = []
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    global_step = 0
+    base_lrs = base_lrs or [pg["lr"] for pg in optimizer.param_groups]
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for epoch in range(num_epochs):
         print(f"\nEpoch {epoch + 1}/{num_epochs}")
         print("-" * 40)
 
-        train_result = train_epoch(model, train_loader, criterion, optimizer, device, scheduler=scheduler)
+        train_result = train_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            device,
+            scheduler=scheduler,
+            scaler=scaler,
+            warmup_steps=warmup_steps,
+            global_step=global_step,
+            base_lrs=base_lrs,
+        )
+        global_step = train_result["global_step"]
+
         val_result = validate_epoch(model, val_loader, criterion, device)
 
         train_loss = train_result["loss"]
         val_loss = val_result["loss"]
         val_f1 = val_result["macro_f1"]
+
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        print(f"Train loss: {train_loss:.4f} | Val loss: {val_loss:.4f} | Val Macro F1: {val_f1:.4f}")
+        print(
+            f"Train loss: {train_loss:.4f} | "
+            f"Val loss: {val_loss:.4f} | "
+            f"Val Macro F1: {val_f1:.4f} | "
+            f"LR: {train_result['lr']:.6g}"
+        )
 
-        # Save last checkpoint
+        if plateau_scheduler is not None:
+            plateau_scheduler.step(val_loss)
+
         checkpoint = {
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": (
+                plateau_scheduler.state_dict() if plateau_scheduler is not None else None
+            ),
             "val_loss": val_loss,
             "val_f1": val_f1,
         }
+
+        # Save last checkpoint
         torch.save(checkpoint, os.path.join(checkpoint_dir, "last_model.pt"))
 
-        # Save best checkpoint based on Macro F1
+        # Save best checkpoint (based on F1)
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             best_epoch = epoch + 1
             epochs_without_improvement = 0
+
             torch.save(checkpoint, os.path.join(checkpoint_dir, "best_model.pt"))
+            best_snapshot_dir = os.path.join(
+                checkpoint_dir,
+                "best_models",
+                f"{run_stamp}_ep{epoch + 1:03d}_f1_{val_f1:.4f}_vl_{val_loss:.4f}",
+            )
+            os.makedirs(best_snapshot_dir, exist_ok=True)
+            torch.save(checkpoint, os.path.join(best_snapshot_dir, "model.pt"))
             print(f"New best model saved (val_f1={val_f1:.4f})")
+            print(f"Best snapshot dir: {best_snapshot_dir}")
         else:
             epochs_without_improvement += 1
             print(f"No improvement for {epochs_without_improvement} epoch(s)")
@@ -102,10 +129,15 @@ def run_training(
             print(f"\nEarly stopping at epoch {epoch + 1}")
             break
 
-    print(f"\nTraining complete. Best epoch: {best_epoch} (val_loss={best_val_loss:.4f})")
+    print(
+        f"\nTraining complete. "
+        f"Best epoch: {best_epoch} "
+        f"(Best Val Macro F1={best_val_f1:.4f})"
+    )
 
     return {
         "train_losses": train_losses,
         "val_losses": val_losses,
         "best_epoch": best_epoch,
+        "best_val_f1": best_val_f1,
     }
