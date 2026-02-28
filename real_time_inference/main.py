@@ -15,6 +15,14 @@ Usage
         --video_input  sampleData/sample_0001/weld.avi      \
         --audio_input  sampleData/sample_0001/weld.flac     \
         --sensor_input sampleData/sample_0001/sensor.csv
+    # Windows
+    python -m real_time_inference.main `
+        --video_checkpoint checkpoints/video_classifier.pth `
+        --audio_checkpoint checkpoints/audio/best_model.pt `
+        --video_input  sampleData/sample_0001/weld.avi `
+        --audio_input  sampleData/sample_0001/weld.flac `
+        --sensor_input sampleData/sample_0001/sensor.csv
+
 
     # Video only
     python -m real_time_inference.main \
@@ -129,7 +137,10 @@ def run(cfg: InferenceConfig):
     sensor_stream: Optional[SensorStreamProcessor] = None
 
     if video_model and cfg.video_input:
-        video_stream = VideoStreamProcessor(video_model, cfg.video_input, device)
+        video_stream = VideoStreamProcessor(
+            video_model, cfg.video_input, device,
+            window_size=cfg.video_window_size
+        )
 
     if audio_model and cfg.audio_input:
         audio_stream = AudioStreamProcessor(
@@ -235,6 +246,8 @@ def parse_args() -> InferenceConfig:
     # Benchmark mode
     p.add_argument("--benchmark", action="store_true",
                    help="Profile latency on sample data then exit")
+    p.add_argument("--video_window_size", type=int, default=8,
+                   help="Frames per window (for window-based models)")
 
     args = p.parse_args()
 
@@ -246,6 +259,7 @@ def parse_args() -> InferenceConfig:
         audio_input=args.audio_input,
         sensor_input=args.sensor_input,
         device=args.device,
+        video_window_size=args.video_window_size,
     )
     return cfg
 

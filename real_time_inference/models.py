@@ -85,6 +85,63 @@ class StreamingVideoClassifier(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────
+# Video: Window-based CNN (from video_processing_window/)
+# ─────────────────────────────────────────────────────────────────
+
+class WindowVideoClassifier(nn.Module):
+    """
+    CNN-only classifier that processes fixed-size windows of frames.
+    MobileNetV3-Small backbone + mean-pooling over time + MLP head.
+    """
+
+    def __init__(self, num_classes: int = 7, pretrained: bool = False):
+        super().__init__()
+
+        backbone = models.mobilenet_v3_small(
+            weights=models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        )
+        self.feature_extractor = backbone.features
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.feature_dim = 576
+
+        self.classifier = nn.Sequential(
+            nn.Linear(self.feature_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: [B, T, 3, 224, 224] or [B, 3, 224, 224]
+        """
+        if x.dim() == 4:
+            x = x.unsqueeze(1)
+
+        B, T, C, H, W = x.size()
+        x = x.view(B * T, C, H, W)
+
+        features = self.feature_extractor(x)
+        features = self.avgpool(features)
+        features = torch.flatten(features, 1)          # [B*T, 576]
+        features = features.view(B, T, -1)             # [B, T, 576]
+
+        # Aggregate windows: mean pool across time
+        features = features.mean(dim=1)                # [B, 576]
+        logits = self.classifier(features)
+        return logits
+
+    @torch.no_grad()
+    def predict_window(self, window_tensor):
+        """Helper for real-time inference window processing."""
+        self.eval()
+        logits = self.forward(window_tensor)
+        probs = torch.softmax(logits, dim=1)
+        return probs
+
+
+# ─────────────────────────────────────────────────────────────────
 # Audio: lightweight 3-block CNN  (from audio_model.py)
 # ─────────────────────────────────────────────────────────────────
 
@@ -177,13 +234,26 @@ class AudioTransform(nn.Module):
 # ─────────────────────────────────────────────────────────────────
 
 def load_video_model(checkpoint_path: str, device: torch.device,
-                     num_classes: int = 7, hidden_size: int = 128
-                     ) -> StreamingVideoClassifier:
-    """Load trained video model weights and return in eval mode."""
-    model = StreamingVideoClassifier(
-        num_classes=num_classes, hidden_size=hidden_size, pretrained=False
-    )
+                      num_classes: int = 7, hidden_size: int = 128
+                      ) -> nn.Module:
+    """
+    Load trained video model. Distinguishes between GRU and Window
+    architectures by inspecting the state_dict keys.
+    """
+    # 1. Load weights
     state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+
+    # 2. Decide architecture based on keys
+    if "gru.weight_ih_l0" in state:
+        model = StreamingVideoClassifier(
+            num_classes=num_classes, hidden_size=hidden_size, pretrained=False
+        )
+        print(f"[models] Detected GRU architecture")
+    else:
+        model = WindowVideoClassifier(num_classes=num_classes, pretrained=False)
+        print(f"[models] Detected Window architecture")
+
+    # 3. Load and return
     model.load_state_dict(state)
     model.to(device).eval()
     print(f"[models] Video model loaded from {checkpoint_path}")

@@ -84,11 +84,11 @@ def compute_hackathon_score(binary_f1, macro_f1):
     return 0.6 * binary_f1 + 0.4 * macro_f1
 
 
-def train_video(config, full_train=False):
+def train_video(config, full_train=False, checkpoint=None):
     # Extract configs
     v_conf = config['video']['training']
     m_conf = config['video']['model']
-    data_root = config['data_root']
+    data_root = config['train_data_root']
     device = config.get('device', 'auto')
     if device == "auto":
         device = torch.device(
@@ -112,6 +112,8 @@ def train_video(config, full_train=False):
     print(f"       full_train:  {full_train}")
     if full_train:
         print(f"       ⚠ FULL TRAINING MODE: using 100% of data, no validation")
+    if checkpoint:
+        print(f"       ⚠ RESUMING from checkpoint: {checkpoint}")
 
     # ── 1. Discover files, labels, and groups ────────────────────
     print(f"\n[6/8] Discovering video files in {os.path.abspath(data_root)}...")
@@ -182,13 +184,13 @@ def train_video(config, full_train=False):
     t_dataset = time.time()
     train_dataset = WeldingSequenceDataset(
         train_paths, train_labels,
-        transform=get_video_transforms(),
+        transform=get_video_transforms(is_training=True),
         seq_len=v_conf['seq_len'],
         frame_skip=v_conf['frame_skip']
     )
     val_dataset = WeldingSequenceDataset(
         val_paths, val_labels,
-        transform=get_video_transforms(),
+        transform=get_video_transforms(is_training=False),
         seq_len=v_conf['seq_len'],
         frame_skip=v_conf['frame_skip']
     )
@@ -199,11 +201,11 @@ def train_video(config, full_train=False):
 
     train_loader = DataLoader(
         train_dataset, batch_size=v_conf['batch_size'],
-        shuffle=True, num_workers=4, pin_memory=True
+        shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True
     )
     val_loader = DataLoader(
         val_dataset, batch_size=v_conf['batch_size'],
-        shuffle=False, num_workers=4, pin_memory=True
+        shuffle=False, num_workers=8, pin_memory=True, persistent_workers=True
     )
     print(f"       Train batches: {len(train_loader)}")
     if not full_train:
@@ -222,17 +224,36 @@ def train_video(config, full_train=False):
     print(f"       Parameters: {n_params:,}")
     print(f"       Pretrained backbone: {m_conf['pretrained']}")
 
-    # Inverse-frequency class weights
+    checkpoint_path_to_load = config.get('video', {}).get('training', {}).get('resume_from') or checkpoint
+
+    if checkpoint_path_to_load:
+        abs_ckpt = os.path.abspath(checkpoint_path_to_load)
+        if not os.path.exists(checkpoint_path_to_load):
+            print(f"  ⚠ WARNING: Checkpoint file NOT FOUND: {abs_ckpt}")
+            print(f"       Training will start from scratch (pretrained backbone only).")
+        else:
+            print(f"       Loading checkpoint from {abs_ckpt}...")
+            try:
+                state_dict = torch.load(checkpoint_path_to_load, map_location=device)
+                model.load_state_dict(state_dict)
+                print(f"       ✓ Checkpoint loaded successfully.")
+            except Exception as e:
+                print(f"  ✗ ERROR loading checkpoint: {e}")
+                raise
+
+
+    # Inverse-frequency class weights + Label Smoothing
     use_weights = v_conf.get('class_weights', 'inverse_frequency')
     if use_weights == 'inverse_frequency':
         weights = compute_class_weights(train_label_indices, num_classes).to(device)
         print(f"       Class weights (inverse-freq): {[f'{w:.3f}' for w in weights.tolist()]}")
-        criterion = nn.CrossEntropyLoss(weight=weights)
+        criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
     else:
         print(f"       Class weights: none (uniform)")
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     optimizer = optim.Adam(model.parameters(), lr=v_conf['lr'])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=v_conf['epochs'])
 
     # Mixed precision scaler
     use_amp = device.type == 'cuda'
@@ -374,6 +395,9 @@ def train_video(config, full_train=False):
             epoch_total = time.time() - epoch_start
             print(f"\n  Epoch {epoch+1} total time: {epoch_total:.1f}s")
             print(f"{'─'*65}\n")
+        
+        # Step the scheduler
+        scheduler.step()
 
     total_time = time.time() - _t0
     print(f"{'='*65}")
@@ -390,6 +414,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train video classifier with JSON config")
     parser.add_argument("--config", type=str, default="../configs/master_config.json",
                         help="Path to master config")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to .pth checkpoint to resume training from")
     parser.add_argument("--full", action="store_true",
                         help="Train on 100%% of data (no validation split). "
                              "Use for final submission model.")
@@ -400,4 +426,4 @@ if __name__ == "__main__":
         config = json.load(f)
     print(f"Config loaded: project={config.get('project_name', '?')}\n")
 
-    train_video(config, full_train=args.full)
+    train_video(config, full_train=args.full, checkpoint=args.checkpoint)

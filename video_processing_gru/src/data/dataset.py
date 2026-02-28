@@ -83,12 +83,22 @@ class WeldingSequenceDataset(Dataset):
         # Stack frames into [seq_len, 3, 224, 224]
         return torch.stack(frames), sample["label"]
 
-def get_video_transforms():
-    return transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+def get_video_transforms(is_training=True):
+    if is_training:
+        return transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
+            transforms.RandomGrayscale(p=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    else:
+        return transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
 def get_group_from_path(video_path: str) -> str:
     """
@@ -114,16 +124,21 @@ def get_video_files_and_labels(data_root):
     via GroupShuffleSplit.
     """
     video_data = []
-    # This logic matches the DatasetExplorer structure
-    for root, dirs, files in os.walk(data_root):
-        for file in files:
-            if file.endswith('.avi'):
-                path = os.path.join(root, file)
-                # Label is suffix of parent folder or filename
-                # Standard pattern: .../run_id/run_id.avi where run_id is xx-xx-xx-xxxx-LL
-                run_id = os.path.splitext(file)[0]
-                parts = run_id.split('-')
-                label = parts[-1] if len(parts) > 1 else "00"
-                group = get_group_from_path(path)
-                video_data.append((path, label, group))
+    
+    def fast_scandir(dirname):
+        try:
+            for entry in os.scandir(dirname):
+                if entry.is_dir(follow_symlinks=False):
+                    fast_scandir(entry.path)
+                elif entry.name.endswith('.avi'):
+                    path = entry.path
+                    run_id = os.path.splitext(entry.name)[0]
+                    parts = run_id.split('-')
+                    label = parts[-1] if len(parts) > 1 else "00"
+                    group = get_group_from_path(path)
+                    video_data.append((path, label, group))
+        except PermissionError:
+            pass
+            
+    fast_scandir(data_root)
     return video_data

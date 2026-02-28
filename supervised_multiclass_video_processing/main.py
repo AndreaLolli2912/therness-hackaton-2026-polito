@@ -19,6 +19,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import classification_report, roc_auc_score, f1_score
 from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.impute import SimpleImputer
+import joblib
 from src.data.dataset import build_video_index, IDX_TO_CODE
 
 
@@ -152,26 +153,31 @@ def compute_binary_metrics(y_true, y_pred, y_proba=None):
     return binary_f1, roc
 
 
-def train_baseline_classifier(X, y, groups):
+def train_baseline_classifier(X, y, groups, full_train=False):
     """
-    Trains a robust Random Forest baseline using group-aware splits,
+    Trains a robust Random Forest baseline using group-aware splits (or 100% of data),
     balanced multi-class weighting, and NaN imputation.
-    Reports full 7-class metrics + hackathon combined score.
+    Reports full 7-class metrics + hackathon combined score (if not full_train).
     """
     from sklearn.ensemble import RandomForestClassifier
-    print("\nTraining Multimodal Random Forest classifier (7-class)...")
+    print(f"\nTraining Multimodal Random Forest classifier (7-class) - Full Train: {full_train}...")
 
-    # STRICT LEAKAGE PREVENTION: GroupShuffleSplit on weld_id
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    train_idx, val_idx = next(gss.split(X, y, groups=groups))
-
-    X_train, y_train = X[train_idx], y[train_idx]
-    X_val, y_val = X[val_idx], y[val_idx]
+    if full_train:
+        X_train, y_train = X, y
+        # In full_train mode, validation metrics aren't possible as there is no validation set
+        X_val, y_val = None, None
+    else:
+        # STRICT LEAKAGE PREVENTION: GroupShuffleSplit on weld_id
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        train_idx, val_idx = next(gss.split(X, y, groups=groups))
+        X_train, y_train = X[train_idx], y[train_idx]
+        X_val, y_val = X[val_idx], y[val_idx]
 
     # NaN SAFETY NET: Impute any residual NaN to 0 before sklearn
     imputer = SimpleImputer(strategy='constant', fill_value=0)
     X_train = imputer.fit_transform(X_train)
-    X_val = imputer.transform(X_val)
+    if not full_train:
+        X_val = imputer.transform(X_val)
 
     # Print class distribution
     unique, counts = np.unique(y_train, return_counts=True)
@@ -183,52 +189,72 @@ def train_baseline_classifier(X, y, groups):
     clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
     clf.fit(X_train, y_train, sample_weight=weights)
 
-    val_pred = clf.predict(X_val)
-    val_proba = clf.predict_proba(X_val)  # Shape: [n_samples, n_classes]
+    if not full_train:
+        val_pred = clf.predict(X_val)
+        val_proba = clf.predict_proba(X_val)  # Shape: [n_samples, n_classes]
 
-    # ── Multiclass Metrics ─────────────────────────────────────
-    print("\n" + "=" * 65)
-    print("  MULTIMODAL VALIDATION RESULTS (Sensor + GPU Video Embeddings)")
-    print("=" * 65)
-    print(classification_report(
-        y_val, val_pred,
-        target_names=LABEL_NAMES[:len(np.unique(np.concatenate([y_train, y_val])))],
-        digits=4, zero_division=0
-    ))
+        # ── Multiclass Metrics ─────────────────────────────────────
+        print("\n" + "=" * 65)
+        print("  MULTIMODAL VALIDATION RESULTS (Sensor + GPU Video Embeddings)")
+        print("=" * 65)
+        print(classification_report(
+            y_val, val_pred,
+            target_names=LABEL_NAMES[:len(np.unique(np.concatenate([y_train, y_val])))],
+            digits=4, zero_division=0
+        ))
 
-    # Macro F1 (treats each class equally)
-    macro_f1 = f1_score(y_val, val_pred, average='macro', zero_division=0)
-    print(f"Macro F1: {macro_f1:.4f}")
+        # Macro F1 (treats each class equally)
+        macro_f1 = f1_score(y_val, val_pred, average='macro', zero_division=0)
+        print(f"Macro F1: {macro_f1:.4f}")
 
-    # ── Binary Metrics ─────────────────────────────────────────
-    binary_f1, roc = compute_binary_metrics(y_val, val_pred, val_proba)
-    print(f"Binary F1 (defect vs good): {binary_f1:.4f}")
-    if roc is not None:
-        print(f"Binary ROC-AUC: {roc:.4f}")
+        # ── Binary Metrics ─────────────────────────────────────────
+        binary_f1, roc = compute_binary_metrics(y_val, val_pred, val_proba)
+        print(f"Binary F1 (defect vs good): {binary_f1:.4f}")
+        if roc is not None:
+            print(f"Binary ROC-AUC: {roc:.4f}")
 
-    # ── Multiclass ROC-AUC (One-vs-Rest) ──────────────────────
-    try:
-        mc_roc = roc_auc_score(y_val, val_proba, multi_class='ovr')
-        print(f"Multiclass ROC-AUC (OVR): {mc_roc:.4f}")
-    except ValueError as e:
-        print(f"Multiclass ROC-AUC: N/A ({e})")
+        # ── Multiclass ROC-AUC (One-vs-Rest) ──────────────────────
+        try:
+            mc_roc = roc_auc_score(y_val, val_proba, multi_class='ovr')
+            print(f"Multiclass ROC-AUC (OVR): {mc_roc:.4f}")
+        except ValueError as e:
+            print(f"Multiclass ROC-AUC: N/A ({e})")
 
-    # ── Hackathon Combined Score ──────────────────────────────
-    hackathon_score = 0.6 * binary_f1 + 0.4 * macro_f1
-    print(f"\nHackathon Combined Score: {hackathon_score:.4f}")
-    print(f"  (0.6 × Binary_F1={binary_f1:.4f} + 0.4 × Macro_F1={macro_f1:.4f})")
-    print("=" * 65)
+        # ── Hackathon Combined Score ──────────────────────────────
+        hackathon_score = 0.6 * binary_f1 + 0.4 * macro_f1
+        print(f"\nHackathon Combined Score: {hackathon_score:.4f}")
+        print(f"  (0.6 × Binary_F1={binary_f1:.4f} + 0.4 × Macro_F1={macro_f1:.4f})")
+        print("=" * 65)
+    else:
+        print("\n" + "=" * 65)
+        print("  MODEL TRAINED ON 100% OF DATA (No validation metrics available)")
+        print("=" * 65)
 
-    return clf
+    return clf, imputer
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Train multiclass random forest on GPU embeddings and sensor stats.")
+    parser.add_argument("--full", action="store_true", help="Train on 100% of the dataset without a validation split. Useful for generating final submission models.")
+    args = parser.parse_args()
+
     dataset_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dataset"))
 
     # Load Fused Dataset
     X, y, groups, kept = load_multimodal_dataset(dataset_root=dataset_root)
 
     if len(y) > 0:
-        model = train_baseline_classifier(X, y, groups)
+        model, imputer = train_baseline_classifier(X, y, groups, full_train=args.full)
+        
+        # Save model and imputer together
+        save_dir = os.path.join(os.path.dirname(__file__), "weights")
+        os.makedirs(save_dir, exist_ok=True)
+        filename = "multimodal_rf_model_full.pkl" if args.full else "multimodal_rf_model.pkl"
+        save_path = os.path.join(save_dir, filename)
+        
+        print(f"\nSaving model and imputer to {save_path}...")
+        joblib.dump({'model': model, 'imputer': imputer}, save_path)
+        print("Done.")
     else:
         print("No valid data samples found. Check dataset path and contents.")

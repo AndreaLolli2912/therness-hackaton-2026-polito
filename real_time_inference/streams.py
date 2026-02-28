@@ -14,7 +14,7 @@ import torch
 from torchvision import transforms
 
 from .models import (
-    StreamingVideoClassifier, AudioCNN, AudioTransform,
+    StreamingVideoClassifier, WindowVideoClassifier, AudioCNN, AudioTransform,
     load_video_model, load_audio_model,
 )
 from .config import InferenceConfig
@@ -42,12 +42,23 @@ class VideoStreamProcessor:
     successive frames for temporal awareness.
     """
 
-    def __init__(self, model: StreamingVideoClassifier,
-                 source: str, device: torch.device):
+    def __init__(self, model: torch.nn.Module,
+                 source: str, device: torch.device,
+                 window_size: int = 8):
         self.model = model
         self.device = device
         self.transform = _get_video_transforms()
-        self.hidden_state: Optional[torch.Tensor] = None
+        
+        # Detect model type
+        self.is_window_model = isinstance(model, WindowVideoClassifier)
+        self.window_size = window_size
+        
+        if self.is_window_model:
+            self.window_buffer = []
+            print(f"[video] Using window-based inference (rolling buffer size={window_size})")
+        else:
+            self.hidden_state: Optional[torch.Tensor] = None
+            print(f"[video] Using GRU-based streaming inference")
 
         # Source can be a camera index ("0") or file path
         src = int(source) if source.isdigit() else source
@@ -75,9 +86,25 @@ class VideoStreamProcessor:
         tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            probs, self.hidden_state = self.model.predict_stream(
-                tensor, self.hidden_state
-            )
+            if self.is_window_model:
+                # Rolling buffer logic
+                self.window_buffer.append(tensor)
+                if len(self.window_buffer) > self.window_size:
+                    self.window_buffer.pop(0)
+                
+                # If buffer not full yet, we can't make a good prediction
+                # but we can pad it or just return a dummy
+                if len(self.window_buffer) < self.window_size:
+                    # Return neutral probabilities until buffer is full
+                    return np.ones(7, dtype=np.float32) / 7.0
+                
+                # Stack buffer into [1, T, C, H, W]
+                window_tensor = torch.stack([t.squeeze(0) for t in self.window_buffer]).unsqueeze(0)
+                probs = self.model.predict_window(window_tensor)
+            else:
+                probs, self.hidden_state = self.model.predict_stream(
+                    tensor, self.hidden_state
+                )
         return probs.squeeze(0).cpu().numpy()
 
     @property
@@ -88,7 +115,10 @@ class VideoStreamProcessor:
         """Reset stream to beginning (for benchmark loops)."""
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         self._frame_idx = 0
-        self.hidden_state = None
+        if self.is_window_model:
+            self.window_buffer = []
+        else:
+            self.hidden_state = None
 
     def close(self):
         self.cap.release()
