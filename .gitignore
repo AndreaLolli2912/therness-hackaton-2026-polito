@@ -1,3 +1,8 @@
 sampleData
 __pycache__
 checkpoints
+
+dataset
+.idea
+Data-driven artificial intelligence methods for real-time welding defect diagnosis A critical review and future outlook.pdf
+inference_paper_summary.md

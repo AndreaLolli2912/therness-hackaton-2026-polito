@@ -1,0 +1,18 @@
+# Requirements for real_time_inference/ (self-contained)
+# Core ML
+torch>=2.0
+torchaudio>=2.0
+torchvision>=0.15
+
+# Video / image
+opencv-python>=4.8
+
+# Audio (file I/O already via torchaudio)
+sounddevice>=0.4     # optional: live microphone capture
+
+# Sensor
+pandas>=2.0
+numpy>=1.24
+
+# Serial (optional: for live sensor hardware)
+# pyserial>=3.5

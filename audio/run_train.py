@@ -134,6 +134,7 @@ def run_training(
         f"Best epoch: {best_epoch} "
         f"(Best Val Macro F1={best_val_f1:.4f})"
     )
+    print(f"\nTraining complete. Best epoch: {best_epoch} (val_f1={best_val_f1:.4f})")
 
     return {
         "train_losses": train_losses,
