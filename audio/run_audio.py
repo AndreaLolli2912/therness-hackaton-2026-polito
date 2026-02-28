@@ -514,6 +514,7 @@ def main():
             base_lrs=[optim_cfg["lr"]] * len(optimizer.param_groups),
             patience=patience,
             seed=seed,
+            target_metric_threshold=train_cfg.get("target_metric_threshold", None),
         )
     else:
         history = run_training(
@@ -530,6 +531,7 @@ def main():
             base_lrs=[optim_cfg["lr"]] * len(optimizer.param_groups),
             patience=patience,
             seed=seed,
+            target_metric_threshold=train_cfg.get("target_metric_threshold", None),
         )
 
     print(f"\nBest epoch: {history['best_epoch']}")
