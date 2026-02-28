@@ -84,7 +84,7 @@ def compute_hackathon_score(binary_f1, macro_f1):
     return 0.6 * binary_f1 + 0.4 * macro_f1
 
 
-def train_video(config):
+def train_video(config, full_train=False):
     # Extract configs
     v_conf = config['video']['training']
     m_conf = config['video']['model']
@@ -109,6 +109,9 @@ def train_video(config):
     print(f"       lr:          {v_conf['lr']}")
     print(f"       seq_len:     {v_conf['seq_len']}")
     print(f"       frame_skip:  {v_conf['frame_skip']}")
+    print(f"       full_train:  {full_train}")
+    if full_train:
+        print(f"       ⚠ FULL TRAINING MODE: using 100% of data, no validation")
 
     # ── 1. Discover files, labels, and groups ────────────────────
     print(f"\n[6/8] Discovering video files in {os.path.abspath(data_root)}...")
@@ -135,37 +138,44 @@ def train_video(config):
         idx = CODE_TO_IDX.get(code, '?')
         print(f"         Code {code} (class {idx}): {label_counts[code]} videos")
 
-    # ── 2. Group-aware split (prevents data leakage) ─────────────
-    print(f"\n       Splitting data with GroupShuffleSplit (no leakage)...")
-    split_strategy = v_conf.get('split_strategy', 'group_shuffle')
-
-    if split_strategy == 'group_shuffle':
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        train_idx, val_idx = next(gss.split(paths, label_indices, groups=groups))
+    # ── 2. Split or use full data ─────────────────────────────────
+    if full_train:
+        print(f"\n       Using ALL {len(paths)} videos for training (no validation split)")
+        train_paths = paths
+        train_labels = labels
+        val_paths = []
+        val_labels = []
+        train_label_indices = label_indices
     else:
-        # Fallback to stratified split (no group awareness)
-        from sklearn.model_selection import train_test_split
-        indices = list(range(len(paths)))
-        train_idx, val_idx = train_test_split(
-            indices, test_size=0.2, random_state=42, stratify=label_indices
-        )
+        print(f"\n       Splitting data with GroupShuffleSplit (no leakage)...")
+        split_strategy = v_conf.get('split_strategy', 'group_shuffle')
 
-    train_paths = [paths[i] for i in train_idx]
-    train_labels = [labels[i] for i in train_idx]
-    val_paths = [paths[i] for i in val_idx]
-    val_labels = [labels[i] for i in val_idx]
-    train_label_indices = [label_indices[i] for i in train_idx]
+        if split_strategy == 'group_shuffle':
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            train_idx, val_idx = next(gss.split(paths, label_indices, groups=groups))
+        else:
+            from sklearn.model_selection import train_test_split
+            indices = list(range(len(paths)))
+            train_idx, val_idx = train_test_split(
+                indices, test_size=0.2, random_state=42, stratify=label_indices
+            )
 
-    n_train_groups = len(set(groups[train_idx]))
-    n_val_groups = len(set(groups[val_idx]))
-    overlap = set(groups[train_idx]) & set(groups[val_idx])
-    print(f"       Split: {len(train_paths)} train ({n_train_groups} groups), "
-          f"{len(val_paths)} val ({n_val_groups} groups)")
-    print(f"       Group overlap: {len(overlap)} (should be 0)")
+        train_paths = [paths[i] for i in train_idx]
+        train_labels = [labels[i] for i in train_idx]
+        val_paths = [paths[i] for i in val_idx]
+        val_labels = [labels[i] for i in val_idx]
+        train_label_indices = [label_indices[i] for i in train_idx]
 
-    if overlap:
-        print(f"  WARNING: {len(overlap)} configuration folder(s) appear in both "
-              f"train and val sets. Consider adjusting split strategy.")
+        n_train_groups = len(set(groups[train_idx]))
+        n_val_groups = len(set(groups[val_idx]))
+        overlap = set(groups[train_idx]) & set(groups[val_idx])
+        print(f"       Split: {len(train_paths)} train ({n_train_groups} groups), "
+              f"{len(val_paths)} val ({n_val_groups} groups)")
+        print(f"       Group overlap: {len(overlap)} (should be 0)")
+
+        if overlap:
+            print(f"  WARNING: {len(overlap)} configuration folder(s) appear in both "
+                  f"train and val sets. Consider adjusting split strategy.")
 
     # ── 3. Prepare datasets ──────────────────────────────────────
     print(f"\n[7/8] Building datasets and dataloaders...")
@@ -183,7 +193,8 @@ def train_video(config):
         frame_skip=v_conf['frame_skip']
     )
     print(f"       Train dataset: {len(train_dataset)} sequences")
-    print(f"       Val dataset:   {len(val_dataset)} sequences")
+    if not full_train:
+        print(f"       Val dataset:   {len(val_dataset)} sequences")
     print(f"       Datasets built in {time.time()-t_dataset:.1f}s.")
 
     train_loader = DataLoader(
@@ -195,7 +206,8 @@ def train_video(config):
         shuffle=False, num_workers=4, pin_memory=True
     )
     print(f"       Train batches: {len(train_loader)}")
-    print(f"       Val batches:   {len(val_loader)}")
+    if not full_train:
+        print(f"       Val batches:   {len(val_loader)}")
 
     # ── 4. Initialize model ──────────────────────────────────────
     print(f"\n[8/8] Initializing model...")
@@ -231,11 +243,19 @@ def train_video(config):
     epochs = v_conf['epochs']
     checkpoint_path = v_conf['checkpoint_path']
 
+    # In full mode, save to a separate file
+    if full_train:
+        base, ext = os.path.splitext(checkpoint_path)
+        checkpoint_path = f"{base}_full{ext}"
+
     total_setup_time = time.time() - _t0
     print(f"\n{'='*65}")
     print(f"  TRAINING START — {epochs} epochs, setup took {total_setup_time:.1f}s")
-    print(f"  Checkpoint metric: 0.6 * Binary_F1 + 0.4 * Macro_F1")
-    print(f"  Best model saved to: {checkpoint_path}")
+    if full_train:
+        print(f"  Mode: FULL TRAINING (100% data, no validation)")
+    else:
+        print(f"  Checkpoint metric: 0.6 * Binary_F1 + 0.4 * Macro_F1")
+    print(f"  Model saved to: {checkpoint_path}")
     print(f"{'='*65}\n")
 
     for epoch in range(epochs):
@@ -289,66 +309,77 @@ def train_video(config):
         print(f"     Binary F1:      {train_binary_f1:.4f}")
         print(f"     Hackathon Score: {train_hackathon:.4f}")
 
-        # ── Validation loop ──────────────────────────────────────
-        print(f"\n  ━━━ Epoch {epoch+1}/{epochs} ━━━ VALIDATION ━━━")
-        val_start = time.time()
-        model.eval()
-        val_loss = 0
-        val_preds = []
-        val_labels_list = []
-        val_probs = []
-
-        with torch.no_grad():
-            for j, (sequences, batch_labels) in enumerate(val_loader):
-                sequences, batch_labels = sequences.to(device), batch_labels.to(device)
-                logits, _ = model(sequences)
-                loss = criterion(logits, batch_labels)
-                val_loss += loss.item()
-
-                probs = torch.softmax(logits, dim=1)
-                _, predicted = logits.max(1)
-                val_preds.extend(predicted.cpu().numpy())
-                val_labels_list.extend(batch_labels.cpu().numpy())
-                val_probs.extend(probs.cpu().numpy())
-
-                if j % 5 == 0:
-                    print(f"  Val Step [{j+1:>4}/{len(val_loader)}]")
-
-        avg_val_loss = val_loss / max(len(val_loader), 1)
-        val_macro_f1 = f1_score(val_labels_list, val_preds, average='macro', zero_division=0)
-        val_binary_f1, val_roc_auc = compute_binary_metrics(
-            val_labels_list, val_preds, val_probs
-        )
-        val_hackathon = compute_hackathon_score(val_binary_f1, val_macro_f1)
-        val_time = time.time() - val_start
-
-        print(f"\n  ── Epoch {epoch+1} Validation Summary ({val_time:.1f}s) ──")
-        print(f"     Val Loss:       {avg_val_loss:.4f}")
-        print(f"     Macro F1:       {val_macro_f1:.4f}")
-        print(f"     Binary F1:      {val_binary_f1:.4f}")
-        print(f"     ROC-AUC:        {val_roc_auc if val_roc_auc else 'N/A'}")
-        print(f"     Hackathon Score: {val_hackathon:.4f}")
-        print()
-        print(classification_report(val_labels_list, val_preds, digits=4, zero_division=0))
-
-        # ── Checkpoint on best hackathon score ───────────────────
-        if val_hackathon > best_score:
-            best_score = val_hackathon
+        # ── Validation or save (full mode) ────────────────────────
+        if full_train:
+            # No validation — save after every epoch
             os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
             torch.save(model.state_dict(), checkpoint_path)
-            print(f"  ✓ NEW BEST MODEL SAVED! (Hackathon Score: {best_score:.4f})")
-            print(f"    → {os.path.abspath(checkpoint_path)}")
+            epoch_total = time.time() - epoch_start
+            print(f"\n  ✓ Model saved (epoch {epoch+1}) → {os.path.abspath(checkpoint_path)}")
+            print(f"  Epoch {epoch+1} total time: {epoch_total:.1f}s")
+            print(f"{'─'*65}\n")
         else:
-            print(f"  ✗ No improvement (best={best_score:.4f}, current={val_hackathon:.4f})")
+            # ── Validation loop ──────────────────────────────────
+            print(f"\n  ━━━ Epoch {epoch+1}/{epochs} ━━━ VALIDATION ━━━")
+            val_start = time.time()
+            model.eval()
+            val_loss = 0
+            val_preds = []
+            val_labels_list = []
+            val_probs = []
 
-        epoch_total = time.time() - epoch_start
-        print(f"\n  Epoch {epoch+1} total time: {epoch_total:.1f}s")
-        print(f"{'─'*65}\n")
+            with torch.no_grad():
+                for j, (sequences, batch_labels) in enumerate(val_loader):
+                    sequences, batch_labels = sequences.to(device), batch_labels.to(device)
+                    logits, _ = model(sequences)
+                    loss = criterion(logits, batch_labels)
+                    val_loss += loss.item()
+
+                    probs = torch.softmax(logits, dim=1)
+                    _, predicted = logits.max(1)
+                    val_preds.extend(predicted.cpu().numpy())
+                    val_labels_list.extend(batch_labels.cpu().numpy())
+                    val_probs.extend(probs.cpu().numpy())
+
+                    if j % 5 == 0:
+                        print(f"  Val Step [{j+1:>4}/{len(val_loader)}]")
+
+            avg_val_loss = val_loss / max(len(val_loader), 1)
+            val_macro_f1 = f1_score(val_labels_list, val_preds, average='macro', zero_division=0)
+            val_binary_f1, val_roc_auc = compute_binary_metrics(
+                val_labels_list, val_preds, val_probs
+            )
+            val_hackathon = compute_hackathon_score(val_binary_f1, val_macro_f1)
+            val_time = time.time() - val_start
+
+            print(f"\n  ── Epoch {epoch+1} Validation Summary ({val_time:.1f}s) ──")
+            print(f"     Val Loss:       {avg_val_loss:.4f}")
+            print(f"     Macro F1:       {val_macro_f1:.4f}")
+            print(f"     Binary F1:      {val_binary_f1:.4f}")
+            print(f"     ROC-AUC:        {val_roc_auc if val_roc_auc else 'N/A'}")
+            print(f"     Hackathon Score: {val_hackathon:.4f}")
+            print()
+            print(classification_report(val_labels_list, val_preds, digits=4, zero_division=0))
+
+            # ── Checkpoint on best hackathon score ───────────────
+            if val_hackathon > best_score:
+                best_score = val_hackathon
+                os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+                torch.save(model.state_dict(), checkpoint_path)
+                print(f"  ✓ NEW BEST MODEL SAVED! (Hackathon Score: {best_score:.4f})")
+                print(f"    → {os.path.abspath(checkpoint_path)}")
+            else:
+                print(f"  ✗ No improvement (best={best_score:.4f}, current={val_hackathon:.4f})")
+
+            epoch_total = time.time() - epoch_start
+            print(f"\n  Epoch {epoch+1} total time: {epoch_total:.1f}s")
+            print(f"{'─'*65}\n")
 
     total_time = time.time() - _t0
     print(f"{'='*65}")
     print(f"  TRAINING COMPLETE")
-    print(f"  Best Val Hackathon Score: {best_score:.4f}")
+    if not full_train:
+        print(f"  Best Val Hackathon Score: {best_score:.4f}")
     print(f"  Model saved to: {os.path.abspath(checkpoint_path)}")
     print(f"  Total time: {total_time:.1f}s")
     print(f"{'='*65}")
@@ -359,6 +390,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train video classifier with JSON config")
     parser.add_argument("--config", type=str, default="../configs/master_config.json",
                         help="Path to master config")
+    parser.add_argument("--full", action="store_true",
+                        help="Train on 100%% of data (no validation split). "
+                             "Use for final submission model.")
     args = parser.parse_args()
 
     print(f"Loading config from {args.config}...")
@@ -366,5 +400,4 @@ if __name__ == "__main__":
         config = json.load(f)
     print(f"Config loaded: project={config.get('project_name', '?')}\n")
 
-    train_video(config)
-
+    train_video(config, full_train=args.full)
