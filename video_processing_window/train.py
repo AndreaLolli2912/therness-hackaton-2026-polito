@@ -171,12 +171,14 @@ def train_video_window(config, full_train=False):
         transform=get_video_transforms(),
         window_size=w_conf['window_size'],
         window_stride=w_conf['window_stride'],
+        data_root=data_root,
     )
     val_dataset = WeldingWindowDataset(
         val_paths, val_labels,
         transform=get_video_transforms(),
         window_size=w_conf['window_size'],
         window_stride=w_conf['window_stride'],
+        data_root=data_root,
     )
     print(f"       Train dataset: {len(train_dataset)} windows")
     if not full_train:

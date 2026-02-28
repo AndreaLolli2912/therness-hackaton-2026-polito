@@ -8,6 +8,7 @@ Mirrors the audio pipeline's chunking strategy:
 
 import os
 import cv2
+import json
 import torch
 import numpy as np
 import concurrent.futures
@@ -29,7 +30,7 @@ class WeldingWindowDataset(Dataset):
     """
 
     def __init__(self, video_paths, labels, window_size=8, window_stride=4,
-                 transform=None):
+                 transform=None, data_root=None):
         """
         Args:
             video_paths: list of paths to .avi files
@@ -37,6 +38,7 @@ class WeldingWindowDataset(Dataset):
             window_size: number of frames per window
             window_stride: step between consecutive window starts
             transform:   torchvision transform for individual frames
+            data_root:   optional root to save/load .video_metadata.json cache
         """
         self.window_size = window_size
         self.transform = transform
@@ -46,45 +48,83 @@ class WeldingWindowDataset(Dataset):
             "00": 0, "01": 1, "02": 2, "06": 3, "07": 4, "08": 5, "11": 6
         }
 
-        # ── Parallel Frame Counting & Sample Discovery ──
-        print(f"       Checking {len(video_paths)} videos for windows (parallel)...")
-        
-        def process_one_video(item):
-            path, code = item
-            if not os.path.exists(path):
-                return []
-            
-            cap = cv2.VideoCapture(path)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.release()
-            
-            video_samples = []
-            if total_frames < window_size:
-                video_samples.append({
-                    "video_path": path,
-                    "start_frame": 0,
-                    "total_frames": total_frames,
-                    "label": self.label_map.get(code, 0),
-                })
-            else:
-                for start_f in range(0, total_frames - window_size + 1, window_stride):
-                    video_samples.append({
-                        "video_path": path,
-                        "start_frame": start_f,
-                        "total_frames": total_frames,
-                        "label": self.label_map.get(code, 0),
-                    })
-            return video_samples
+        # ── Persistent Metadata Caching ──
+        cache_path = os.path.join(data_root, ".video_metadata.json") if data_root else None
+        cache = {}
+        if cache_path and os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r') as f:
+                    cache = json.load(f)
+            except Exception:
+                cache = {}
 
-        # Use ThreadPoolExecutor for I/O bound tasks (opening/closing files)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-            video_items = list(zip(video_paths, labels))
-            results = list(tqdm(executor.map(process_one_video, video_items), 
-                               total=len(video_items), desc="       Windexing", 
-                               leave=False, disable=len(video_items) < 100))
-        
-        for res in results:
-            self.samples.extend(res)
+        # ── Parallel Frame Counting & Sample Discovery ──
+        to_scan = []
+        for p, c in zip(video_paths, labels):
+            rel_path = os.path.relpath(p, data_root) if data_root else p
+            if rel_path in cache:
+                # Add from cache immediately
+                total_frames = cache[rel_path]
+                if total_frames < window_size:
+                    self.samples.append({
+                        "video_path": p, "start_frame": 0,
+                        "total_frames": total_frames, "label": self.label_map.get(c, 0),
+                    })
+                else:
+                    for start_f in range(0, total_frames - window_size + 1, window_stride):
+                        self.samples.append({
+                            "video_path": p, "start_frame": start_f,
+                            "total_frames": total_frames, "label": self.label_map.get(c, 0),
+                        })
+            else:
+                to_scan.append((p, c))
+
+        if to_scan:
+            print(f"       Scanning {len(to_scan)} new videos (parallel)...")
+            def process_one_video(item):
+                path, code = item
+                if not os.path.exists(path): return None, []
+                cap = cv2.VideoCapture(path)
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                cap.release()
+                
+                rel_p = os.path.relpath(path, data_root) if data_root else path
+                
+                video_samples = []
+                if total_frames < window_size:
+                    video_samples.append({
+                        "video_path": path, "start_frame": 0,
+                        "total_frames": total_frames, "label": self.label_map.get(code, 0),
+                    })
+                else:
+                    for start_f in range(0, total_frames - window_size + 1, window_stride):
+                        video_samples.append({
+                            "video_path": path, "start_frame": start_f,
+                            "total_frames": total_frames, "label": self.label_map.get(code, 0),
+                        })
+                return (rel_p, total_frames), video_samples
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+                results = list(tqdm(executor.map(process_one_video, to_scan), 
+                                   total=len(to_scan), desc="       Windexing", 
+                                   leave=False, disable=len(to_scan) < 50))
+            
+            new_metadata = {}
+            for meta, samples in results:
+                if meta:
+                    new_metadata[meta[0]] = meta[1]
+                self.samples.extend(samples)
+            
+            # Update cache file
+            if cache_path:
+                cache.update(new_metadata)
+                try:
+                    with open(cache_path, 'w') as f:
+                        json.dump(cache, f)
+                except Exception:
+                    pass
+        else:
+            print(f"       Loaded {len(video_paths)} videos from cache.")
 
     def __len__(self):
         return len(self.samples)
@@ -122,7 +162,7 @@ class WeldingFileDataset(Dataset):
     """
 
     def __init__(self, video_paths, labels, window_size=8, window_stride=4,
-                 transform=None):
+                 transform=None, data_root=None):
         self.window_size = window_size
         self.window_stride = window_stride
         self.transform = transform
@@ -135,17 +175,60 @@ class WeldingFileDataset(Dataset):
         self.labels = []
         self._frame_counts = []
 
+        # ── Persistent Metadata Caching ──
+        cache_path = os.path.join(data_root, ".video_metadata.json") if data_root else None
+        cache = {}
+        if cache_path and os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r') as f:
+                    cache = json.load(f)
+            except Exception:
+                cache = {}
+
+        to_scan = []
         for path, code in zip(video_paths, labels):
-            if not os.path.exists(path):
-                continue
-            cap = cv2.VideoCapture(path)
-            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.release()
-            if total < window_size:
-                continue
-            self.files.append(path)
-            self.labels.append(self.label_map.get(code, 0))
-            self._frame_counts.append(total)
+            if not os.path.exists(path): continue
+            rel_path = os.path.relpath(path, data_root) if data_root else path
+            
+            if rel_path in cache:
+                total = cache[rel_path]
+                if total >= window_size:
+                    self.files.append(path)
+                    self.labels.append(self.label_map.get(code, 0))
+                    self._frame_counts.append(total)
+            else:
+                to_scan.append((path, code))
+
+        if to_scan:
+            print(f"       Scanning {len(to_scan)} for file indices (parallel)...")
+            def process_one(item):
+                p, c = item
+                cap = cv2.VideoCapture(p)
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                cap.release()
+                rel_p = os.path.relpath(p, data_root) if data_root else p
+                return rel_p, total, c
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+                results = list(tqdm(executor.map(process_one, to_scan), 
+                                   total=len(to_scan), desc="       Windexing", 
+                                   leave=False, disable=len(to_scan) < 100))
+            
+            for rel_p, total, code in results:
+                cache[rel_p] = total
+                if total >= window_size:
+                    self.files.append(os.path.join(data_root, rel_p) if data_root else rel_p)
+                    self.labels.append(self.label_map.get(code, 0))
+                    self._frame_counts.append(total)
+            
+            if cache_path:
+                try:
+                    with open(cache_path, 'w') as f:
+                        json.dump(cache, f)
+                except Exception: pass
+        
+        if not to_scan:
+            print(f"       Loaded {len(self.files)} files from cache index.")
 
     def __len__(self):
         return len(self.files)
